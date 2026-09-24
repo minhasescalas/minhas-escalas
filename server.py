@@ -31,6 +31,105 @@ def norm(value):
     return re.sub(r"\D", "", value or "")
 
 
+def format_horario(value):
+    """Normaliza horários para o padrão visual 08h00 às 08h00."""
+    value = clean(value)
+    if not value:
+        return ""
+
+    m = re.search(
+        r"(\d{1,2})\s*h\s*(\d{0,2})\s*(?:/|às?|a)\s*"
+        r"(\d{1,2})\s*h\s*(\d{0,2})",
+        value,
+        re.I,
+    )
+    if m:
+        h1, m1, h2, m2 = m.groups()
+        m1 = m1 or "00"
+        m2 = m2 or "00"
+        return f"{int(h1):02d}h{int(m1):02d} às {int(h2):02d}h{int(m2):02d}"
+
+    m = re.search(
+        r"(\d{1,2})\s*h\s*(\d{0,2})\s*/\s*"
+        r"(\d{1,2})\s*h\s*(\d{0,2})",
+        value,
+        re.I,
+    )
+    if m:
+        h1, m1, h2, m2 = m.groups()
+        m1 = m1 or "00"
+        m2 = m2 or "00"
+        return f"{int(h1):02d}h{int(m1):02d} às {int(h2):02d}h{int(m2):02d}"
+
+    return value
+
+
+def format_graduacao(value):
+    value = clean(value)
+    if not value:
+        return ""
+
+    aliases = {
+        "SD": "Soldado",
+        "CB": "Cabo",
+        "3º SGT": "Terceiro-Sargento",
+        "3° SGT": "Terceiro-Sargento",
+        "3 SGT": "Terceiro-Sargento",
+        "2º SGT": "Segundo-Sargento",
+        "2° SGT": "Segundo-Sargento",
+        "1º SGT": "Primeiro-Sargento",
+        "1° SGT": "Primeiro-Sargento",
+    }
+
+    key = value.upper().replace("  ", " ")
+    if key in aliases:
+        return f"{key} — {aliases[key]}"
+
+    return value
+
+
+def normalize_service(value):
+    value = clean(value)
+    if not value:
+        return ""
+
+    value = re.sub(r"\bM\.?\s*O\.?\b", "MO", value, flags=re.I)
+    value = re.sub(r"\bMO\s*TÁTICO\b", "MO Tático", value, flags=re.I)
+    value = re.sub(r"\bGE\s*TÁTICO\b", "GE Tático", value, flags=re.I)
+    value = re.sub(r"\bGT\s*TÁTICO\b", "GT Tático", value, flags=re.I)
+
+    # Mantém o identificador da viatura no texto do serviço.
+    value = re.sub(r"\s*-\s*", " — ", value)
+    value = re.sub(r"\s+", " ", value)
+
+    return value
+
+
+def normalize_vehicle(value):
+    value = clean(value)
+    if not value:
+        return ""
+
+    m = re.search(
+        r"(?:M\.?\s*O\.?|MO)\s*[-.]?\s*(\d+(?:\.\d+)?)",
+        value,
+        re.I,
+    )
+    if m:
+        return f"M.O. {m.group(1)}"
+
+    m = re.search(
+        r"\b(?:GT|PCR)\s*[-.]?\s*(\d+(?:\.\d+)?)",
+        value,
+        re.I,
+    )
+    if m:
+        prefix = re.search(r"\b(GT|PCR)", value, re.I).group(1).upper()
+        return f"{prefix} {m.group(1)}"
+
+    return value
+
+
 def matricula_matches(text, matricula):
     target = norm(matricula)
 
@@ -43,8 +142,6 @@ def matricula_matches(text, matricula):
     if target not in compact:
         return False
 
-    # Preferir uma matrícula completa,
-    # evitando encontrar a matrícula como parte de outro número.
     variants = [
         (
             rf"(?<!\d){re.escape(target[:6])}"
@@ -68,11 +165,7 @@ def split_items(value):
         value
     )
 
-    return [
-        clean(x)
-        for x in parts
-        if clean(x)
-    ]
+    return [clean(x) for x in parts if clean(x)]
 
 
 def extract_matriculas(value):
@@ -86,20 +179,21 @@ def extract_matriculas(value):
         value
     )
 
-    return [
-        clean(x).replace(" ", "")
-        for x in found
-    ]
+    return [clean(x).replace(" ", "") for x in found]
 
 
 def extract_function(name):
-    m = re.search(
-        r"\((CMT|PAT|MOT)\)",
-        name or "",
-        re.I
-    )
-
+    m = re.search(r"\((CMT|PAT|MOT)\)", name or "", re.I)
     return m.group(1).upper() if m else ""
+
+
+def function_label(value):
+    value = clean(value).upper()
+    return {
+        "CMT": "CMT — Comandante",
+        "PAT": "PAT — Patrulheiro",
+        "MOT": "MOT — Motorista",
+    }.get(value, value)
 
 
 def strip_function(name):
@@ -123,12 +217,24 @@ def extract_vehicle(service):
     return ", ".join(dict.fromkeys(found))
 
 
-def infer_row(row, matricula, document):
-    cells = [
-        clean(x)
-        for x in (row or [])
+def extract_days_from_text(text):
+    text = clean(text)
+
+    patterns = [
+        r"(?:dia|dias)\s+([0-9]{1,2}(?:\s*,\s*[0-9]{1,2})*(?:\s*,?\s*e\s*[0-9]{1,2})?)",
+        r"([0-9]{1,2}(?:\s*,\s*[0-9]{1,2})+(?:\s*,?\s*e\s*[0-9]{1,2})?)\s*\.",
     ]
 
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            return clean(m.group(1))
+
+    return ""
+
+
+def infer_row(row, matricula, document):
+    cells = [clean(x) for x in (row or [])]
     text = " | ".join(cells)
 
     if not matricula_matches(text, matricula):
@@ -153,11 +259,6 @@ def infer_row(row, matricula, document):
         "contexto": text,
     }
 
-    # Estrutura padrão da tabela de escala:
-    #
-    # Serviço/Função | Equipe | Ord. | Graduação |
-    # Matrícula | Efetivo | Dias | Horário
-
     if len(cells) >= 8:
         out["servico"] = cells[0]
         out["equipe"] = cells[1]
@@ -173,11 +274,7 @@ def infer_row(row, matricula, document):
         target = norm(matricula)
 
         idx = next(
-            (
-                i
-                for i, m in enumerate(mats)
-                if norm(m) == target
-            ),
+            (i for i, m in enumerate(mats) if norm(m) == target),
             None
         )
 
@@ -189,7 +286,24 @@ def infer_row(row, matricula, document):
             if idx < len(grades):
                 out["graduacao"] = grades[idx]
 
-    # Fallback para documentos com estrutura diferente.
+    # Documentos como "Escala Principal" frequentemente trazem
+    # a função na coluna própria (ou no texto completo).
+    if not out["funcao"]:
+        if len(cells) >= 9 and cells[8]:
+            out["funcao"] = clean(cells[8])
+        else:
+            out["funcao"] = extract_function(text)
+
+    if not out["nome"]:
+        m = re.search(
+            r"(?:\d+\s+)?(?:SD|CB|2º?\s*SGT|3º?\s*SGT)?\s*"
+            r"\d{6}[-/.]\d\s+([A-ZÀ-Ú][A-ZÀ-Ú .'-]{2,}?)"
+            r"\s*\((CMT|PAT|MOT)\)",
+            text,
+            re.I,
+        )
+        if m:
+            out["nome"] = clean(m.group(1))
 
     if not out["horario"]:
         m = re.search(
@@ -197,54 +311,34 @@ def infer_row(row, matricula, document):
             text,
             re.I
         )
-
         if m:
             out["horario"] = m.group(0)
 
     if not out["data"]:
-        m = re.search(
-            r"\b\d{2}/\d{2}/\d{4}\b",
-            text
-        )
-
+        m = re.search(r"\b\d{2}/\d{2}/\d{4}\b", text)
         if m:
             out["data"] = m.group(0)
 
-    if not out["funcao"]:
-        out["funcao"] = extract_function(text)
-
-    if not out["nome"]:
-        m = re.search(
-            r"([A-ZÀ-Ú][A-ZÀ-Ú .'-]{2,})\s*"
-            r"\((CMT|PAT|MOT)\)",
-            text,
-            re.I
-        )
-
-        if m:
-            out["nome"] = clean(m.group(1))
+    if not out["dias"]:
+        out["dias"] = extract_days_from_text(text)
 
     if not out["viatura"]:
         out["viatura"] = extract_vehicle(text)
 
     if "*" in text:
-        m = re.search(
-            r"\*[^|]{0,180}",
-            text
-        )
-
+        m = re.search(r"\*[^|]{0,180}", text)
         if m:
             out["observacao"] = clean(m.group(0))
 
-    if (
-        not out["observacao"]
-        and re.search(
-            r"folga|compensa|permuta|retificad|concessão|a/c",
+    if not out["observacao"]:
+        m = re.search(
+            r"(concessão do CMT|compensação(?: de horas)?|"
+            r"escala específica|permuta|retificação|a/c[^|]{0,100})",
             text,
             re.I
         )
-    ):
-        out["observacao"] = text[:220]
+        if m:
+            out["observacao"] = clean(m.group(0))
 
     lower = (
         document.get("titulo", "")
@@ -254,20 +348,36 @@ def infer_row(row, matricula, document):
 
     if "folga" in lower:
         out["situacao"] = "Folga"
-
     elif "permuta" in lower:
         out["situacao"] = "Permuta"
-
     elif "retific" in lower:
         out["situacao"] = "Retificação"
-
     elif "compensa" in lower:
         out["situacao"] = "Compensação"
-
+    elif "escala específica" in lower:
+        out["situacao"] = "Escala Específica"
     else:
         out["situacao"] = "Escala"
 
+    # Normalização final dos campos que serão enviados ao index.html.
+    out["servico"] = normalize_service(out["servico"])
+    out["viatura"] = normalize_vehicle(out["viatura"])
+    out["horario"] = format_horario(out["horario"])
+
     return out
+
+
+def enrich_occurrence(occurrence):
+    """Adiciona campos prontos para a apresentação sem alterar o cache."""
+    o = dict(occurrence)
+
+    o["graduacao_exibicao"] = format_graduacao(o.get("graduacao", ""))
+    o["funcao_exibicao"] = function_label(o.get("funcao", ""))
+    o["horario_exibicao"] = format_horario(o.get("horario", ""))
+    o["servico_exibicao"] = normalize_service(o.get("servico", ""))
+    o["viatura_exibicao"] = normalize_vehicle(o.get("viatura", ""))
+
+    return o
 
 
 def load_data():
@@ -276,11 +386,8 @@ def load_data():
 
     try:
         return json.loads(
-            DATA_FILE.read_text(
-                encoding="utf-8"
-            )
+            DATA_FILE.read_text(encoding="utf-8")
         )
-
     except Exception:
         return None
 
@@ -318,40 +425,24 @@ def consult(matricula):
         ocorrencias = []
 
         for row in doc.get("rows", []):
-            hit = infer_row(
-                row,
-                original,
-                doc
-            )
-
+            hit = infer_row(row, original, doc)
             if hit:
-                ocorrencias.append(hit)
+                ocorrencias.append(enrich_occurrence(hit))
 
         if ocorrencias:
             resultados.append({
                 "id": doc.get("id", ""),
-                "titulo": doc.get(
-                    "titulo",
-                    "Documento SEI"
-                ),
-                "data_protocolo": doc.get(
-                    "data_protocolo",
-                    ""
-                ),
-                "documento_data": doc.get(
-                    "documento_data",
-                    ""
-                ),
+                "titulo": doc.get("titulo", "Documento SEI"),
+                "data_protocolo": doc.get("data_protocolo", ""),
+                "documento_data": doc.get("documento_data", ""),
                 "url": doc.get("url", ""),
                 "ocorrencias": ocorrencias,
             })
 
     resultados.sort(
         key=lambda x: (
-            x.get("documento_data")
-            or "99/99/9999",
-            x.get("id")
-            or ""
+            x.get("documento_data") or "99/99/9999",
+            x.get("id") or ""
         )
     )
 
@@ -363,26 +454,44 @@ def consult(matricula):
         "viatura": "",
         "equipe": "",
         "horario": "",
-        "jornada": "24 x 72",
+        "jornada": "24 × 72",
     }
 
-    for result in resultados:
-        for occurrence in result["ocorrencias"]:
+    # Para o perfil, dar prioridade aos registros que realmente
+    # parecem ser a escala principal.
+    prioridade = []
+    restantes = []
 
-            for key in (
-                "nome",
-                "graduacao",
-                "funcao",
-                "servico",
-                "viatura",
-                "equipe",
-                "horario",
+    for result in resultados:
+        titulo = result.get("titulo", "").lower()
+        for occurrence in result["ocorrencias"]:
+            if (
+                "escala principal" in titulo
+                or "escala pelotão tático" in titulo
             ):
-                if (
-                    not profile[key]
-                    and occurrence.get(key)
-                ):
-                    profile[key] = occurrence[key]
+                prioridade.append(occurrence)
+            else:
+                restantes.append(occurrence)
+
+    for occurrence in prioridade + restantes:
+        for key in (
+            "nome",
+            "graduacao",
+            "funcao",
+            "servico",
+            "viatura",
+            "equipe",
+            "horario",
+        ):
+            if not profile[key] and occurrence.get(key):
+                profile[key] = occurrence[key]
+
+    # Campos prontos para o index.html atual.
+    profile["graduacao_exibicao"] = format_graduacao(profile["graduacao"])
+    profile["funcao_exibicao"] = function_label(profile["funcao"])
+    profile["horario_exibicao"] = format_horario(profile["horario"])
+    profile["servico_exibicao"] = normalize_service(profile["servico"])
+    profile["viatura_exibicao"] = normalize_vehicle(profile["viatura"])
 
     return {
         "ok": True,
@@ -390,18 +499,15 @@ def consult(matricula):
         "matricula_normalizada": n,
 
         "total_registros_processo": data.get(
-            "total_registros_processo",
-            0
+            "total_registros_processo", 0
         ),
 
         "documentos_acessiveis": data.get(
-            "documentos_acessiveis",
-            0
+            "documentos_acessiveis", 0
         ),
 
         "documentos_com_falha": data.get(
-            "documentos_com_falha",
-            0
+            "documentos_com_falha", 0
         ),
 
         "documentos_com_ocorrencia": len(resultados),
@@ -409,24 +515,15 @@ def consult(matricula):
         "perfil": profile,
         "resultados": resultados,
 
-        "fonte": data.get(
-            "fonte",
-            PROCESS_URL
-        ),
+        "fonte": data.get("fonte", PROCESS_URL),
 
-        "atualizado_em": data.get(
-            "atualizado_em",
-            ""
-        ),
+        "atualizado_em": data.get("atualizado_em", ""),
     }
 
 
 @app.get("/")
 def home():
-    return send_from_directory(
-        BASE_DIR,
-        "index.html"
-    )
+    return send_from_directory(BASE_DIR, "index.html")
 
 
 @app.get("/health")
@@ -437,25 +534,14 @@ def health():
         "ok": True,
         "service": "minhas-escalas",
         "version": "5.0",
-
-        "base_pronta": bool(
-            data and data.get("documentos")
-        ),
-
+        "base_pronta": bool(data and data.get("documentos")),
         "documentos": (
-            data.get(
-                "documentos_acessiveis",
-                0
-            )
+            data.get("documentos_acessiveis", 0)
             if data
             else 0
         ),
-
         "atualizado_em": (
-            data.get(
-                "atualizado_em",
-                ""
-            )
+            data.get("atualizado_em", "")
             if data
             else ""
         ),
@@ -464,14 +550,8 @@ def health():
 
 @app.get("/api/consultar")
 def api_consultar():
-    matricula = request.args.get(
-        "matricula",
-        ""
-    )
-
-    return jsonify(
-        consult(matricula)
-    )
+    matricula = request.args.get("matricula", "")
+    return jsonify(consult(matricula))
 
 
 @app.get("/api/status")
@@ -482,55 +562,33 @@ def api_status():
         return jsonify({
             "ok": False,
             "base_pronta": False,
-            "mensagem": (
-                "Base ainda não atualizada."
-            ),
+            "mensagem": "Base ainda não atualizada.",
         })
 
     return jsonify({
         "ok": True,
-        "base_pronta": bool(
-            data.get("documentos")
-        ),
-
+        "base_pronta": bool(data.get("documentos")),
         "version": 5,
-
-        "processo": data.get(
-            "processo",
-            ""
-        ),
-
+        "processo": data.get("processo", ""),
         "total_registros_processo": data.get(
-            "total_registros_processo",
-            0
+            "total_registros_processo", 0
         ),
-
         "documentos_acessiveis": data.get(
-            "documentos_acessiveis",
-            0
+            "documentos_acessiveis", 0
         ),
-
         "documentos_com_falha": data.get(
-            "documentos_com_falha",
-            0
+            "documentos_com_falha", 0
         ),
-
-        "atualizado_em": data.get(
-            "atualizado_em",
-            ""
-        ),
+        "atualizado_em": data.get("atualizado_em", ""),
     })
 
 
 @app.get("/test-sei")
 def test_sei():
     """
-    Esta rota NÃO acessa mais o SEI.
-
-    Ela apenas verifica se o Render conseguiu
-    carregar o cache local sei_cache.json.
+    Esta rota não acessa o SEI.
+    Apenas verifica o cache local.
     """
-
     data = load_data()
 
     if not data:
@@ -543,10 +601,7 @@ def test_sei():
             ),
         }), 503
 
-    documentos = data.get(
-        "documentos",
-        []
-    )
+    documentos = data.get("documentos", [])
 
     return jsonify({
         "ok": True,
@@ -557,28 +612,16 @@ def test_sei():
         ),
         "documentos": len(documentos),
         "total_registros_processo": data.get(
-            "total_registros_processo",
-            0
+            "total_registros_processo", 0
         ),
-        "atualizado_em": data.get(
-            "atualizado_em",
-            ""
-        ),
-        "fonte": data.get(
-            "fonte",
-            PROCESS_URL
-        ),
+        "atualizado_em": data.get("atualizado_em", ""),
+        "fonte": data.get("fonte", PROCESS_URL),
     })
 
 
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
-        port=int(
-            os.environ.get(
-                "PORT",
-                5000
-            )
-        ),
+        port=int(os.environ.get("PORT", 5000)),
         debug=False
-        )
+    )
