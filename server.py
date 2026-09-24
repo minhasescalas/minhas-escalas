@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -747,3 +748,5 @@ if __name__ == "__main__":
         ),
         debug=False
     )
+
+# Retry de 503: revisar chamada ao Gemini caso a estrutura tenha sido alterada.
