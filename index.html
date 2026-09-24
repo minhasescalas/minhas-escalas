@@ -3,48 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Minhas Escalas — V6</title>
+<title>Minhas Escalas</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f4f7fb;color:#172033}
 .wrap{max-width:1080px;margin:auto;padding:22px 15px 60px}
 .hero{background:linear-gradient(135deg,#102a43,#176b87);color:#fff;border-radius:24px;padding:28px;box-shadow:0 14px 36px #102a4326}
-.hero h1{margin:0 0 7px;font-size:31px}.hero p{margin:0;opacity:.92}
+.hero h1{margin:0 0 7px;font-size:31px}
+.hero p{margin:0;opacity:.92}
 .search{margin-top:19px;background:#fff;padding:10px;border-radius:16px;display:flex;gap:9px;box-shadow:0 9px 28px #102a431c}
 .search input{flex:1;border:1px solid #d6dde7;border-radius:12px;padding:14px;font-size:17px;outline:none}
 .search input:focus{border-color:#176b87;box-shadow:0 0 0 3px #176b8714}
 .search button{border:0;border-radius:12px;padding:0 22px;background:#176b87;color:#fff;font-weight:800;cursor:pointer}
-.search button:disabled{opacity:.55}.notice{margin-top:12px;font-size:12px;opacity:.82}.status{margin:18px 0}
+.search button:disabled{opacity:.55}
+.notice{margin-top:12px;font-size:12px;opacity:.82}
+.status{margin:18px 0}
 .card{background:#fff;border:1px solid #e1e7ef;border-radius:18px;padding:20px;margin-top:15px;box-shadow:0 6px 20px #1720330a}
-.profile{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.item{background:#f7f9fc;border-radius:12px;padding:12px}
-.item small{display:block;color:#697586;font-size:11px;margin-bottom:4px}.item b{font-size:14px}
-.scale{border-left:4px solid #176b87}.scale h3{margin:0 0 7px}.muted{color:#657387}
-.line{margin:13px 0;padding:12px 0;border-top:1px solid #edf0f4}.line:first-of-type{border-top:0}
+.profile{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.item{background:#f7f9fc;border-radius:12px;padding:12px}
+.item small{display:block;color:#697586;font-size:11px;margin-bottom:4px}
+.item b{font-size:14px}
+.scale{border-left:4px solid #176b87}
+.scale h3{margin:0 0 7px}
+.doc-id{font-weight:800;color:#176b87}
+.muted{color:#657387}
+.primary{background:#eef8fb;border:1px solid #cce8f0;border-radius:12px;padding:14px;margin-top:12px;line-height:1.65}
+.field-list{margin-top:12px}
+.field{padding:9px 0;border-bottom:1px solid #edf0f4;line-height:1.45}
+.field:last-child{border-bottom:0}
+.field b{display:block;color:#4d5d70;font-size:12px;margin-bottom:2px}
 .tag{display:inline-block;background:#e8f3f7;color:#15566d;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;margin:2px}
-.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;margin-top:8px}
-th,td{text-align:left;padding:10px;border-bottom:1px solid #e7ebf0;white-space:nowrap}th{font-size:11px;color:#667085;background:#fafbfd}
-.empty{text-align:center;padding:30px;color:#667085}.error{background:#fff2f2;border:1px solid #ffd0d0;color:#9d2020;padding:14px;border-radius:12px}
+.empty{text-align:center;padding:30px;color:#667085}
+.error{background:#fff2f2;border:1px solid #ffd0d0;color:#9d2020;padding:14px;border-radius:12px}
 .success{background:#effaf4;border:1px solid #ccebd8;color:#166534;padding:13px;border-radius:12px}
-.loading{display:flex;align-items:center;gap:10px}.dot{width:9px;height:9px;border-radius:50%;background:#176b87;animation:p 1s infinite alternate}
-@keyframes p{to{opacity:.25;transform:scale(.65)}}a{color:#176b87;font-weight:700;text-decoration:none}a:hover{text-decoration:underline}
-.small{font-size:12px}.footer{margin-top:18px;font-size:12px;color:#778398;text-align:center}
-.primary{background:#eef8fb;border:1px solid #cce8f0;border-radius:12px;padding:14px;margin-top:12px}
-.obs{margin-top:8px;font-size:13px;color:#58677a}.update{font-size:12px;color:#667085;margin-top:6px}
-.section-title{margin:0 0 12px}.field-list{display:grid;gap:8px;margin-top:12px}
-.field{display:grid;grid-template-columns:190px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid #edf0f4}
-.field:last-child{border-bottom:0}.field-label{color:#667085;font-size:13px;font-weight:700}.field-value{font-weight:700}
-.record-title{font-size:18px}.record-meta{margin-top:5px}.record-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 18px;margin-top:14px}
-.record-field{padding:8px 0;border-bottom:1px solid #edf0f4}.record-field small{display:block;color:#667085;font-size:11px;margin-bottom:3px}.record-field b{font-size:14px}
-.days{font-weight:800;color:#15566d}.principal-label{display:inline-block;background:#176b87;color:#fff;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:800;margin-bottom:8px}
-.summary-note{font-size:12px;color:#667085;margin-top:8px}
+.loading{display:flex;align-items:center;gap:10px}
+.dot{width:9px;height:9px;border-radius:50%;background:#176b87;animation:p 1s infinite alternate}
+@keyframes p{to{opacity:.25;transform:scale(.65)}}
+a{color:#176b87;font-weight:700;text-decoration:none}
+a:hover{text-decoration:underline}
+.small{font-size:12px}
+.footer{margin-top:18px;font-size:12px;color:#778398;text-align:center}
+.table-wrap{overflow:auto}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th,td{text-align:left;padding:10px;border-bottom:1px solid #e7ebf0}
+th{font-size:11px;color:#667085;background:#fafbfd}
 @media(max-width:760px){
-.profile{grid-template-columns:repeat(2,1fr)}.search{flex-direction:column}.search button{height:48px}.hero h1{font-size:26px}.card{padding:16px}
-.field{grid-template-columns:1fr;gap:3px}.record-grid{grid-template-columns:1fr}
+.profile{grid-template-columns:repeat(2,1fr)}
+.search{flex-direction:column}
+.search button{height:48px}
+.hero h1{font-size:26px}
+.card{padding:16px}
 }
 </style>
 </head>
 <body>
 <main class="wrap">
+
 <section class="hero">
 <h1>👮 Minhas Escalas</h1>
 <p>Consulte sua matrícula na base atualizada a partir dos documentos públicos do processo de escalas.</p>
@@ -57,7 +71,8 @@ th,td{text-align:left;padding:10px;border-bottom:1px solid #e7ebf0;white-space:n
 
 <div id="status"></div>
 <section id="resultado"></section>
-<div id="footer" class="footer">Fonte: processo público do SEI/PMPE · versão 6</div>
+<div id="footer" class="footer">Fonte: processo público do SEI/PMPE</div>
+
 </main>
 
 <script>
@@ -68,215 +83,79 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({
 '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
 }[c]));
 
-const val=x=>x===undefined||x===null||String(x).trim()===''?'—':String(x);
+const val=x=>x||'—';
 
 function link(url,label='Abrir no SEI ↗'){
-return url?'<a href="'+esc(url)+'" target="_blank" rel="noopener">'+label+'</a>':'';
+return url
+? '<a href="'+esc(url)+'" target="_blank" rel="noopener">'+label+'</a>'
+: '';
 }
 
-function cleanText(value){
-return String(value??'').replace(/\s+/g,' ').trim();
+function headingFor(r,o){
+const tipo=o.tipo_documento||r.tipo_documento||'Escala';
+return tipo;
 }
 
-function normalizeService(value){
-let s=cleanText(value);
-if(!s)return '';
-s=s.replace(/M\.?\s*O\.?\s*T[ÁA]TICO/ig,'MO Tático');
-s=s.replace(/\s*-\s*M\.?\s*O\.?\s*/ig,' — M.O. ');
-s=s.replace(/M\.O\.\s*(\d+(?:\.\d+)?)/ig,'M.O. $1');
-s=s.replace(/\s+/g,' ').trim();
-return s;
-}
+function renderProfile(p,d){
+let h='<div class="card"><h2 style="margin-top:0">👮 Matrícula '+esc(d.matricula)+'</h2><div class="profile">';
 
-function normalizeVehicle(value,service){
-let v=cleanText(value);
-if(!v){
-const m=cleanText(service).match(/(?:M\.?\s*O\.?|MO Tático)\s*[-—]?\s*(?:M\.O\.\s*)?(\d+(?:\.\d+)?)/i);
-if(m)v='M.O. '+m[1];
-}
-if(v && !/M\.O\./i.test(v) && /^\d+(?:\.\d+)?$/.test(v))v='M.O. '+v;
-return v.replace(/^M\.O\.\s*M\.O\./i,'M.O. ');
-}
-
-function normalizeGrade(value){
-let g=cleanText(value);
-if(!g)return '';
-const map={
-'3º SGT':'3º SGT — Terceiro-Sargento',
-'2º SGT':'2º SGT — Segundo-Sargento',
-'1º SGT':'1º SGT — Primeiro-Sargento',
-'CB':'CB — Cabo',
-'SD':'SD — Soldado'
-};
-return map[g.toUpperCase()]||g;
-}
-
-function normalizeFunction(value){
-const f=cleanText(value).toUpperCase();
-const map={
-'CMT':'CMT — Comandante',
-'PAT':'PAT — Patrulheiro',
-'MOT':'MOT — Motociclista'
-};
-return map[f]||cleanText(value);
-}
-
-function normalizeTime(value){
-let s=cleanText(value);
-if(!s)return '';
-s=s.replace(/\s*\/\s*/g,' às ');
-s=s.replace(/\b(\d{1,2})h(\d{1,2})\b/g,(m,h,min)=>String(h).padStart(2,'0')+'h'+min);
-s=s.replace(/\b(\d{1,2})h\b/g,(m,h)=>String(h).padStart(2,'0')+'h');
-return s;
-}
-
-function formatDays(value){
-let s=cleanText(value);
-if(!s)return '';
-s=s.replace(/\s+/g,' ').replace(/\s*,\s*/g,', ').replace(/\s+e\s+/g,' e ');
-return s;
-}
-
-function classifyRecord(r,o){
-const title=cleanText(r.titulo);
-const text=(title+' '+cleanText(o.contexto)+' '+cleanText(o.observacao)).toLowerCase();
-
-if(/folga/.test(text))return 'Escala de folga';
-if(/permuta/.test(text))return 'Permuta de serviço';
-if(/retific/.test(text))return 'Retificação';
-if(/compensa/.test(text))return 'Escala de compensação';
-if(/escala principal|escala pelotão tático/i.test(title))return 'Escala principal';
-if(/escala de serviço/.test(title.toLowerCase()))return 'Escala de Serviço';
-return 'Registro de escala';
-}
-
-function isPrincipal(r,o){
-const title=cleanText(r.titulo).toLowerCase();
-return /escala principal|escala pelotão tático/.test(title) && !/folga|permuta|retific/.test(title);
-}
-
-function recordObservation(o){
-let obs=cleanText(o.observacao);
-if(!obs)return '';
-obs=obs.replace(/^.*?\b(?:DESCRIÇÃO|OBSERVAÇÃO)\s*:\s*/i,'');
-return cleanText(obs);
-}
-
-function renderProfile(d){
-const p=d.perfil||{};
-const fields=[
+[
 ['Nome',p.nome],
-['Graduação',normalizeGrade(p.graduacao)],
-['Função',normalizeFunction(p.funcao)],
-['Serviço',normalizeService(p.servico)],
-['Viatura',normalizeVehicle(p.viatura,p.servico)],
+['Graduação',p.graduacao],
+['Função',p.funcao],
+['Serviço',p.servico],
+['Viatura',p.viatura],
 ['Equipe',p.equipe],
-['Horário da escala principal',normalizeTime(p.horario)],
-['Jornada',p.jornada||'24 × 72']
-];
-
-let h='<div class="card"><h2 class="section-title">👮 Matrícula '+esc(d.matricula)+'</h2><div class="profile">';
-fields.forEach(([label,value])=>{
-h+='<div class="item"><small>'+label+'</small><b>'+esc(val(value))+'</b></div>';
+['Horário da escala principal',p.horario],
+['Jornada',p.jornada]
+].forEach(([a,b])=>{
+h+='<div class="item"><small>'+a+'</small><b>'+esc(val(b))+'</b></div>';
 });
+
 h+='</div></div>';
 return h;
 }
 
-function renderPrincipal(r,o,numero){
-const service=normalizeService(o.servico||r.titulo);
-const vehicle=normalizeVehicle(o.viatura,o.servico);
-let serviceDisplay=service;
-if(vehicle && /MO Tático/i.test(service) && !/M\.O\./i.test(serviceDisplay)){
-serviceDisplay=serviceDisplay+' ('+vehicle.replace(/^M\.O\.\s*/i,'')+')';
-}
-
+function renderOccurrence(numero,r,o){
+const titulo=headingFor(r,o);
 let h='<div class="card scale">';
-h+='<div class="principal-label">ESCALA PRINCIPAL</div>';
-h+='<h3 class="record-title">'+numero+'. Escala principal — documento '+esc(r.id||'—')+'</h3>';
-h+='<div class="record-meta small muted">'+esc(r.titulo||'Documento SEI');
-if(r.url)h+=' · '+link(r.url);
-h+='</div>';
+h+='<h3>'+numero+'. '+esc(titulo)+' <span class="doc-id">— '+esc(r.id||'—')+'</span></h3>';
+
+if(r.url) h+='<div class="small muted">'+link(r.url,'Abrir documento no SEI ↗')+'</div>';
+
+const principal=titulo==='Escala Principal';
+
+if(principal){
 h+='<div class="primary">';
-h+='<b>'+esc(serviceDisplay||'Serviço não identificado')+'</b>';
-if(o.equipe)h+=', Equipe '+esc(o.equipe)+'.';
-if(o.dias)h+='<br>Dias previstos: <span class="days">'+esc(formatDays(o.dias))+' de setembro de 2026</span>.';
-if(o.horario)h+='<br>Horário: <b>'+esc(normalizeTime(o.horario))+'</b>.';
-h+='</div></div>';
-return h;
+if(o.servico) h+='<div><b>Serviço:</b> '+esc(o.servico)+(o.viatura?' — '+esc(o.viatura):'')+'</div>';
+if(o.equipe) h+='<div><b>Equipe:</b> '+esc(o.equipe)+'</div>';
+if(o.dias) h+='<div><b>Dias previstos:</b> '+esc(o.dias)+' de setembro de 2026.</div>';
+if(o.horario) h+='<div><b>Horário:</b> '+esc(o.horario)+'.</div>';
+h+='</div>';
+}else{
+h+='<div class="field-list">';
+
+if(o.data) h+='<div class="field"><b>Data</b>'+esc(o.data)+'</div>';
+if(o.servico || o.viatura){
+h+='<div class="field"><b>Serviço</b>'+esc(o.servico||'')+(o.viatura?' — '+esc(o.viatura):'')+'</div>';
+}
+if(o.graduacao) h+='<div class="field"><b>Graduação</b>'+esc(o.graduacao)+'</div>';
+if(o.matricula) h+='<div class="field"><b>Matrícula</b>'+esc(o.matricula)+'</div>';
+if(o.nome) h+='<div class="field"><b>Nome</b>'+esc(o.nome)+'</div>';
+if(o.horario) h+='<div class="field"><b>Horário</b>'+esc(o.horario)+'</div>';
+if(o.observacao) h+='<div class="field"><b>Motivo/observação</b>'+esc(o.observacao)+'</div>';
+if(o.equipe) h+='<div class="field"><b>Equipe</b>'+esc(o.equipe)+'</div>';
+
+h+='</div>';
 }
 
-function renderOccurrence(r,o,numero){
-const type=classifyRecord(r,o);
-const service=normalizeService(o.servico||r.titulo);
-const grade=normalizeGrade(o.graduacao);
-const func=normalizeFunction(o.funcao);
-const time=normalizeTime(o.horario);
-const obs=recordObservation(o);
-
-let h='<div class="card scale">';
-h+='<h3 class="record-title">'+numero+'. '+esc(type)+' — documento '+esc(r.id||'—')+'</h3>';
-h+='<div class="record-meta small muted">'+esc(r.titulo||'Documento SEI');
-if(r.url)h+=' · '+link(r.url);
-h+='</div>';
-
-h+='<div class="record-grid">';
-if(o.data)h+='<div class="record-field"><small>Data</small><b>'+esc(o.data)+'</b></div>';
-if(service)h+='<div class="record-field"><small>Serviço</small><b>'+esc(service)+'</b></div>';
-if(o.viatura)h+='<div class="record-field"><small>Viatura</small><b>'+esc(normalizeVehicle(o.viatura,o.servico))+'</b></div>';
-if(o.equipe)h+='<div class="record-field"><small>Equipe</small><b>'+esc(o.equipe)+'</b></div>';
-if(grade)h+='<div class="record-field"><small>Graduação</small><b>'+esc(grade)+'</b></div>';
-if(o.matricula)h+='<div class="record-field"><small>Matrícula</small><b>'+esc(o.matricula)+'</b></div>';
-if(o.nome)h+='<div class="record-field"><small>Nome</small><b>'+esc(o.nome)+'</b></div>';
-if(func)h+='<div class="record-field"><small>Função</small><b>'+esc(func)+'</b></div>';
-if(time)h+='<div class="record-field"><small>Horário</small><b>'+esc(time)+'</b></div>';
-h+='<div class="record-field"><small>Situação</small><b>'+esc(type)+'</b></div>';
-h+='</div>';
-
-if(obs)h+='<div class="obs"><b>Motivo/observação:</b> '+esc(obs)+'</div>';
 h+='</div>';
 return h;
-}
-
-function buildSummaryRows(d){
-const rows=[];
-let principalAdded=false;
-
-d.resultados.forEach(r=>{
-r.ocorrencias.forEach(o=>{
-if(isPrincipal(r,o)){
-if(principalAdded)return;
-principalAdded=true;
-rows.push([
-formatDays(o.dias)+' /09',
-'Escala Principal ('+(r.id||'—')+')',
-normalizeService(o.servico||r.titulo)+(normalizeVehicle(o.viatura,o.servico)?' — '+normalizeVehicle(o.viatura,o.servico):''),
-normalizeTime(o.horario),
-'Regular'
-]);
-return;
-}
-
-const type=classifyRecord(r,o);
-let situation=type;
-const obs=recordObservation(o);
-if(obs)situation+=' — '+obs;
-
-rows.push([
-o.data||r.documento_data||r.data_protocolo||'—',
-type+' ('+(r.id||'—')+')',
-normalizeService(o.servico||r.titulo),
-normalizeTime(o.horario),
-situation
-]);
-});
-});
-
-return rows;
 }
 
 function render(d){
 status.innerHTML='<div class="success"><b>Consulta concluída.</b> '+d.documentos_com_ocorrencia+' registro(s) encontrado(s) para a matrícula.</div>';
+
 footer.innerHTML='Base atualizada em '+esc(d.atualizado_em||'—')+' · '+link(d.fonte,'Abrir processo no SEI ↗');
 
 if(!d.resultados.length){
@@ -284,26 +163,34 @@ out.innerHTML='<div class="card empty"><b>Nenhuma ocorrência encontrada.</b><br
 return;
 }
 
-let h=renderProfile(d);
+const p=d.perfil||{};
+let h=renderProfile(p,d);
+let rows=[];
 let numero=0;
 
 d.resultados.forEach(r=>{
 r.ocorrencias.forEach(o=>{
 numero++;
-if(isPrincipal(r,o))h+=renderPrincipal(r,o,numero);
-else h+=renderOccurrence(r,o,numero);
+h+=renderOccurrence(numero,r,o);
+
+rows.push([
+o.data||r.documento_data||r.data_protocolo||'',
+(r.tipo_documento||o.tipo_documento||'Escala'),
+r.id||'',
+(o.servico?(o.servico+(o.viatura?' — '+o.viatura:'')):''),
+o.horario||'',
+o.situacao||'Escala'
+]);
 });
 });
 
-const rows=buildSummaryRows(d);
-h+='<div class="card"><h2 class="section-title">Resumo completo</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Registro</th><th>Serviço</th><th>Horário</th><th>Situação</th></tr></thead><tbody>';
+h+='<div class="card"><h2 style="margin-top:0">Resumo completo</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Registro</th><th>Nº</th><th>Serviço</th><th>Horário</th><th>Situação</th></tr></thead><tbody>';
 
 rows.forEach(x=>{
 h+='<tr>'+x.map(v=>'<td>'+esc(val(v))+'</td>').join('')+'</tr>';
 });
 
-h+='</tbody></table></div><div class="summary-note">O resumo consolida a escala principal e os registros específicos encontrados para a matrícula.</div></div>';
-
+h+='</tbody></table></div></div>';
 out.innerHTML=h;
 }
 
@@ -323,10 +210,9 @@ try{
 const r=await fetch('/api/consultar?matricula='+encodeURIComponent(m));
 const d=await r.json();
 
-if(!r.ok||!d.ok)throw Error(d.erro||'Erro na consulta.');
+if(!r.ok||!d.ok) throw Error(d.erro||'Erro na consulta.');
 
 render(d);
-
 }catch(e){
 status.innerHTML='<div class="error">'+esc(e.message)+'</div>';
 }finally{
@@ -335,9 +221,8 @@ btn.disabled=false;
 }
 
 btn.addEventListener('click',consultar);
-
 input.addEventListener('keydown',e=>{
-if(e.key==='Enter')consultar();
+if(e.key==='Enter') consultar();
 });
 </script>
 </body>
