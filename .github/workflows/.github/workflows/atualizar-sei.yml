@@ -1,0 +1,52 @@
+name: Atualizar escalas do SEI
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 00h, 06h, 12h e 18h no horário de Brasília (UTC-3).
+    - cron: '0 3,9,15,21 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-sei
+  cancel-in-progress: true
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependências do atualizador
+        run: pip install -r requirements.txt
+
+      - name: Atualizar cache do SEI
+        run: python updater.py
+
+      - name: Verificar alterações
+        id: changes
+        run: |
+          if git diff --quiet -- data/sei_cache.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gravar atualização no GitHub
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "Minhas Escalas Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sei_cache.json
+          git commit -m "Atualizar escalas do SEI"
+          git push
