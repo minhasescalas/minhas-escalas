@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import requests
 from datetime import datetime
 from pathlib import Path
 
@@ -235,21 +236,28 @@ def api_consultar():
     return jsonify(consult(request.args.get("matricula", "")))
 
 
-@app.get("/api/status")
-def api_status():
-    data = load_data()
-    if not data:
-        return jsonify({"ok": False, "base_pronta": False, "mensagem": "Base ainda não atualizada."})
-    return jsonify({
-        "ok": True,
-        "base_pronta": bool(data.get("documentos")),
-        "version": 5,
-        "processo": data.get("processo", ""),
-        "total_registros_processo": data.get("total_registros_processo", 0),
-        "documentos_acessiveis": data.get("documentos_acessiveis", 0),
-        "documentos_com_falha": data.get("documentos_com_falha", 0),
-        "atualizado_em": data.get("atualizado_em", ""),
-    })
+@app.get("/test-sei")
+def test_sei():
+    try:
+        r = requests.get(
+            PROCESS_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0 MinhasEscalas/5.0"
+            },
+            timeout=20,
+        )
+        return jsonify({
+            "ok": True,
+            "status_http": r.status_code,
+            "tamanho_resposta": len(r.text),
+            "mensagem": "O Render conseguiu acessar o SEI."
+        })
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "erro": str(exc),
+            "mensagem": "O Render também não conseguiu acessar o SEI."
+        }), 500
 
 
 if __name__ == "__main__":
