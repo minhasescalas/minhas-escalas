@@ -3,32 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
-
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
+from google import genai
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "data" / "sei_cache.json"
-# Also accept the cache in the project root, which is convenient for Render/GitHub.
-if not DATA_FILE.exists():
-    DATA_FILE = BASE_DIR / "sei_cache.json"
-
-PDF_DIRS = [
-    BASE_DIR / "data" / "escalas27",
-    BASE_DIR / "data" / "pdfs",
-    BASE_DIR / "escalas27",
-    BASE_DIR / "pdfs",
-    BASE_DIR,
-]
-
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol")
-OPENAI_CACHE_FILE = BASE_DIR / ".openai_file_ids.json"
 
 PROCESS_URL = (
     "https://sei.pe.gov.br/sei/processo_acesso_externo_consulta.php"
@@ -37,13 +18,6 @@ PROCESS_URL = (
 )
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
-
-MONTHS = {
-    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
-    "abril": 4, "maio": 5, "junho": 6, "julho": 7,
-    "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11,
-    "dezembro": 12,
-}
 
 
 def clean(value):
@@ -54,425 +28,722 @@ def norm(value):
     return re.sub(r"\D", "", str(value or ""))
 
 
-def matricula_pattern(matricula):
-    target = norm(matricula)
-    if len(target) < 5:
-        return ""
-    if len(target) == 7:
-        return rf"(?<!\d){re.escape(target[:6])}\s*[-/.]?\s*{re.escape(target[6])}(?!\d)"
-    return rf"(?<!\d){re.escape(target)}(?!\d)"
+def split_items(value):
+    if not value:
+        return []
+
+    value = str(value).replace("\r", "\n")
+
+    parts = re.split(
+        r"\s*/\s*|\s*\|\s*|\s*;\s*|\n+",
+        value
+    )
+
+    return [clean(x) for x in parts if clean(x)]
 
 
-def matricula_matches(text, matricula):
-    p = matricula_pattern(matricula)
-    return bool(p and re.search(p, str(text or ""), re.I))
+def extract_matriculas(value):
+    if not value:
+        return []
+
+    found = re.findall(
+        r"(?<!\d)\d{6}\s*[-/.]\s*\d(?!\d)"
+        r"|"
+        r"(?<!\d)\d{6}\s+\d(?!\d)",
+        str(value)
+    )
+
+    return [clean(x).replace(" ", "") for x in found]
+
+
+def extract_function(value):
+    m = re.search(r"\((CMT|PAT|MOT)\)", value or "", re.I)
+    return m.group(1).upper() if m else ""
+
+
+def strip_function(value):
+    return clean(
+        re.sub(
+            r"\s*\((?:CMT|PAT|MOT)\)\s*",
+            "",
+            value or "",
+            flags=re.I
+        )
+    )
+
+
+def extract_vehicle(value):
+    found = re.findall(
+        r"(?:M\.?\s*O\.?|GT|PCR)\s*\d+(?:\.\d+)?",
+        value or "",
+        re.I
+    )
+    return ", ".join(dict.fromkeys(found))
 
 
 def load_data():
     if not DATA_FILE.exists():
         return None
+
     try:
-        return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        return json.loads(
+            DATA_FILE.read_text(encoding="utf-8")
+        )
     except Exception:
         return None
 
 
-def find_documents_for_matricula(data, matricula):
-    """Use the cache only to locate candidate PDFs; the AI reads the PDFs themselves."""
-    candidates = []
-    for document in data.get("documentos", []):
-        hit = False
-        for row in document.get("rows", []):
-            cells = [str(x or "") for x in (row or [])]
-            # Prefer exact matricula column, but accept the row/context when necessary.
-            if len(cells) > 4 and norm(cells[4]) == norm(matricula):
-                hit = True
-                break
-            if matricula_matches(" | ".join(cells), matricula):
-                hit = True
-                break
-        if hit:
-            candidates.append(document)
-    return candidates
+def infer_row(row, matricula, document):
+    cells = [clean(x) for x in (row or [])]
+    text = " | ".join(cells)
 
+    if norm(matricula) not in norm(text):
+        return None
 
-def all_pdf_files():
-    files = []
-    seen = set()
-    for directory in PDF_DIRS:
-        if not directory.exists() or not directory.is_dir():
-            continue
-        try:
-            paths = directory.rglob("*.pdf")
-        except Exception:
-            continue
-        for path in paths:
-            try:
-                key = str(path.resolve())
-            except Exception:
-                key = str(path)
-            if key not in seen:
-                seen.add(key)
-                files.append(path)
-    return files
+    out = {
+        "data": (
+            document.get("documento_data")
+            or document.get("data_protocolo", "")
+        ),
+        "servico": "",
+        "equipe": "",
+        "graduacao": "",
+        "matricula": matricula,
+        "nome": "",
+        "funcao": "",
+        "viatura": "",
+        "horario": "",
+        "dias": "",
+        "observacao": "",
+        "situacao": "",
+        "contexto": text,
+    }
 
+    if len(cells) >= 8:
+        out["servico"] = cells[0]
+        out["equipe"] = cells[1]
+        out["graduacao"] = cells[3]
+        out["horario"] = cells[7]
+        out["dias"] = cells[6]
+        out["viatura"] = extract_vehicle(cells[0])
 
-def find_pdf_for_document(document):
-    wanted = clean(document.get("arquivo", ""))
-    doc_id = clean(document.get("id", ""))
+        mats = extract_matriculas(cells[4])
+        names = split_items(cells[5])
+        grades = split_items(cells[3])
 
-    files = all_pdf_files()
-    if wanted:
-        wanted_base = Path(wanted).name
-        for path in files:
-            if path.name == wanted_base:
-                return path
-            # Cache filenames sometimes contain (1) while deployment files do not.
-            if path.stem == Path(wanted_base).stem.replace("(1)", ""):
-                return path
-
-    if doc_id:
-        for path in files:
-            if doc_id in path.name:
-                return path
-
-    # Last resort: the combined September PDF can contain the whole process.
-    for path in files:
-        if path.name.lower() == "tatico escalas de setembro.pdf":
-            return path
-    return None
-
-
-def load_openai_file_cache():
-    if not OPENAI_CACHE_FILE.exists():
-        return {}
-    try:
-        value = json.loads(OPENAI_CACHE_FILE.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_openai_file_cache(cache):
-    try:
-        OPENAI_CACHE_FILE.write_text(
-            json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
+        idx = next(
+            (
+                i
+                for i, value in enumerate(mats)
+                if norm(value) == norm(matricula)
+            ),
+            None
         )
-    except Exception:
-        pass
+
+        if idx is not None:
+            if idx < len(names):
+                out["nome"] = strip_function(names[idx])
+                out["funcao"] = extract_function(names[idx])
+
+            if idx < len(grades):
+                out["graduacao"] = grades[idx]
+
+    if not out["horario"]:
+        m = re.search(
+            r"\b\d{1,2}h\d{0,2}\s*/\s*\d{1,2}h\d{0,2}\b",
+            text,
+            re.I
+        )
+        if m:
+            out["horario"] = m.group(0)
+
+    if not out["data"]:
+        m = re.search(
+            r"\b\d{2}/\d{2}/\d{4}\b",
+            text
+        )
+        if m:
+            out["data"] = m.group(0)
+
+    if not out["funcao"]:
+        out["funcao"] = extract_function(text)
+
+    if not out["nome"]:
+        m = re.search(
+            r"([A-ZÀ-Ú][A-ZÀ-Ú .'-]{2,})\s*"
+            r"\((CMT|PAT|MOT)\)",
+            text,
+            re.I
+        )
+        if m:
+            out["nome"] = clean(m.group(1))
+
+    if not out["viatura"]:
+        out["viatura"] = extract_vehicle(text)
+
+    lower = (
+        document.get("titulo", "")
+        + " "
+        + text
+    ).lower()
+
+    if "folga" in lower or "concessão do cmt" in lower:
+        out["situacao"] = "Folga"
+    elif "permuta" in lower:
+        out["situacao"] = "Permuta"
+    elif "retific" in lower:
+        out["situacao"] = "Retificação"
+    elif "compensa" in lower:
+        out["situacao"] = "Compensação"
+    else:
+        out["situacao"] = "Escala"
+
+    return out
 
 
-def get_client():
-    if OpenAI is None:
-        raise RuntimeError("A biblioteca 'openai' não está instalada no servidor.")
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY não está configurada no Render.")
-    return OpenAI(api_key=api_key)
+def find_candidates(matricula):
+    data = load_data()
+
+    if not data:
+        return None, []
+
+    results = []
+
+    for document in data.get("documentos", []):
+        occurrences = []
+
+        for row in document.get("rows", []):
+            hit = infer_row(
+                row,
+                matricula,
+                document
+            )
+
+            if hit:
+                occurrences.append(hit)
+
+        if occurrences:
+            results.append({
+                "id": document.get("id", ""),
+                "titulo": document.get(
+                    "titulo",
+                    "Documento SEI"
+                ),
+                "data_protocolo": document.get(
+                    "data_protocolo",
+                    ""
+                ),
+                "documento_data": document.get(
+                    "documento_data",
+                    ""
+                ),
+                "url": document.get("url", ""),
+                "ocorrencias": occurrences,
+            })
+
+    return data, results
 
 
-SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "ok": {"type": "boolean"},
-        "matricula": {"type": "string"},
-        "perfil": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "nome": {"type": "string"},
-                "graduacao": {"type": "string"},
-                "funcao": {"type": "string"},
-                "servico": {"type": "string"},
-                "viatura": {"type": "string"},
-                "equipe": {"type": "string"},
-                "horario": {"type": "string"},
-                "jornada": {"type": "string"},
-            },
-            "required": ["nome", "graduacao", "funcao", "servico", "viatura", "equipe", "horario", "jornada"],
-        },
-        "resultados": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": {"type": "string"},
-                    "titulo": {"type": "string"},
-                    "tipo_documento": {"type": "string"},
-                    "titulo_exibicao": {"type": "string"},
-                    "ocorrencias": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "data": {"type": "string"},
-                                "servico": {"type": "string"},
-                                "equipe": {"type": "string"},
-                                "graduacao": {"type": "string"},
-                                "matricula": {"type": "string"},
-                                "nome": {"type": "string"},
-                                "funcao": {"type": "string"},
-                                "viatura": {"type": "string"},
-                                "horario": {"type": "string"},
-                                "dias": {"type": "string"},
-                                "observacao": {"type": "string"},
-                                "situacao": {"type": "string"},
-                                "tipo_documento": {"type": "string"},
-                                "titulo_exibicao": {"type": "string"},
-                            },
-                            "required": [
-                                "data", "servico", "equipe", "graduacao", "matricula",
-                                "nome", "funcao", "viatura", "horario", "dias",
-                                "observacao", "situacao", "tipo_documento", "titulo_exibicao",
-                            ],
-                        },
-                    },
-                },
-                "required": ["id", "titulo", "tipo_documento", "titulo_exibicao", "ocorrencias"],
-            },
-        },
-    },
-    "required": ["ok", "matricula", "perfil", "resultados"],
-}
+def basic_profile(results):
+    profile = {
+        "nome": "",
+        "graduacao": "",
+        "funcao": "",
+        "servico": "",
+        "viatura": "",
+        "equipe": "",
+        "horario": "",
+        "jornada": "24 x 72",
+    }
+
+    for result in results:
+        for occurrence in result["ocorrencias"]:
+            for key in profile:
+                if (
+                    not profile[key]
+                    and occurrence.get(key)
+                ):
+                    profile[key] = occurrence[key]
+
+    return profile
 
 
-INSTRUCTIONS = r"""
-Você é o extrator oficial de dados do sistema Minhas Escalas.
+def get_gemini_client():
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
 
-Sua única fonte de verdade são os PDFs de escalas anexados nesta consulta.
-O servidor anexará um ou mais PDFs e informará abaixo o ID/título esperado de cada arquivo.
+    if not key:
+        raise RuntimeError(
+            "GEMINI_API_KEY não está configurada no Render."
+        )
 
-OBJETIVO
-Localizar EXATAMENTE a matrícula solicitada nos PDFs e devolver os registros que pertencem a essa matrícula.
+    return genai.Client(api_key=key)
 
-REGRA MAIS IMPORTANTE
-NÃO invente, complete, estime, calcule ou deduza informação que não esteja sustentada pelo PDF.
-Não use conhecimento externo.
-Não copie dias, horário, serviço, viatura ou situação de outra pessoa apenas porque parecem semelhantes.
 
-ESCALA PRINCIPAL
-A Escala Principal pode ter tabelas com células mescladas, grupos/equipes (ALFA, BRAVO, CHARLIE, DELTA) e dias escritos em uma célula que visualmente se aplica a várias linhas.
-Você deve interpretar a posição visual da tabela e associar o grupo/dias à linha da matrícula.
-Se os dias do grupo estiverem visualmente apresentados ao lado de várias pessoas, eles pertencem às pessoas daquele grupo conforme a estrutura da tabela.
-NÃO use a ordem numérica da matrícula como substituto da leitura da tabela.
-NÃO pegue os dias do grupo anterior ou seguinte.
+def analyze_with_ai(matricula, documents):
+    payload = []
 
-OUTROS DOCUMENTOS
-- Concessão do CMT / Compensação de Horas: classifique como "Escala de Folga" e situação "Folga" quando isso for o que o documento indicar.
-- Registro de serviço efetivo: classifique como "Escala de Serviço".
-- Permuta: classifique como "Permuta de Serviço".
-- A classificação deve vir do conteúdo do documento, não do nome da pessoa.
+    for document in documents:
+        payload.append({
+            "id": document["id"],
+            "titulo": document["titulo"],
+            "data_protocolo": document["data_protocolo"],
+            "documento_data": document["documento_data"],
+            "ocorrencias": document["ocorrencias"],
+        })
 
-DATAS
-Em documentos mensais, transforme o dia em data completa usando o mês/ano indicado no próprio documento.
-Ex.: dia 05 em setembro de 2026 -> 05/09/2026.
-Só faça essa transformação quando o mês/ano estiver explícito no documento.
+    prompt = f"""
+Analise SOMENTE os dados fornecidos abaixo para a matrícula
+{matricula}.
 
-HORÁRIOS
-Preserve o horário real da linha. Não troque o horário de uma pessoa pelo horário de outra.
+Não invente informações e não use informações de outras matrículas.
 
-CAMPOS
-Retorne nome, graduação, função, serviço, viatura, equipe, horário, dias, data e observação somente quando estiverem sustentados pelo PDF.
-Quando um campo não estiver identificável, retorne string vazia.
+Objetivo:
+organizar os registros encontrados e corrigir a classificação
+quando o próprio conteúdo do documento deixar isso claro.
 
-DUPLICATAS
-Não crie duplicatas artificiais. Se a mesma matrícula aparecer mais de uma vez no mesmo documento em registros distintos, mantenha os registros distintos quando eles realmente forem distintos.
+Regras importantes:
 
-SAÍDA
-Responda exclusivamente no JSON estruturado solicitado pelo sistema.
+1. ESCALA PRINCIPAL
+- Identifique os dias efetivamente associados à matrícula.
+- Não complete dias por inferência.
+- Não copie dias de outra pessoa.
+- Se o documento tiver texto truncado, use somente o que estiver
+  claramente associado à matrícula.
+- Preserve o horário encontrado no documento.
+
+2. ESCALA DE FOLGA
+- Se houver indicação de folga, "concessão do CMT" ou documento
+  claramente referente à folga, classifique como "Folga".
+- Preserve a data específica e o horário específico.
+- Não transforme uma folga em escala regular.
+
+3. OUTROS REGISTROS
+- Preserve permuta, compensação e retificação quando estiverem
+  claramente indicadas.
+- Não misture informações de documentos diferentes.
+
+4. PERFIL
+- O nome, graduação, função, serviço, viatura e equipe devem
+  corresponder à matrícula consultada.
+- Jornada padrão: "24 x 72", salvo informação diferente explícita.
+
+5. IMPORTANTE
+- Cada ocorrência deve permanecer vinculada ao seu documento.
+- Não invente datas.
+- Não invente viatura.
+- Não invente equipe.
+- Não invente horários.
+- Quando um campo não puder ser determinado, deixe vazio.
+
+Responda SOMENTE JSON, exatamente neste formato:
+
+{{
+  "perfil": {{
+    "nome": "",
+    "graduacao": "",
+    "funcao": "",
+    "servico": "",
+    "viatura": "",
+    "equipe": "",
+    "horario": "",
+    "jornada": "24 x 72"
+  }},
+  "ocorrencias": [
+    {{
+      "documento": "",
+      "titulo": "",
+      "tipo": "",
+      "data": "",
+      "servico": "",
+      "equipe": "",
+      "graduacao": "",
+      "matricula": "{matricula}",
+      "nome": "",
+      "funcao": "",
+      "viatura": "",
+      "horario": "",
+      "dias": "",
+      "observacao": ""
+    }}
+  ]
+}}
+
+DADOS:
+{json.dumps(payload, ensure_ascii=False)}
 """
 
+    client = get_gemini_client()
 
-def upload_or_get_file_id(client, path, cache):
-    key = f"{path.resolve()}::{path.stat().st_size}::{path.stat().st_mtime_ns}"
-    cached = cache.get(key)
-    if cached:
-        try:
-            client.files.retrieve(cached)
-            return cached
-        except Exception:
-            cache.pop(key, None)
-
-    with path.open("rb") as fh:
-        uploaded = client.files.create(
-        file=fh,
-        purpose="user_data",
-        expires_after={"anchor": "created_at", "seconds": 2592000},
-    )
-    cache[key] = uploaded.id
-    save_openai_file_cache(cache)
-    return uploaded.id
-
-
-def ai_consult(matricula):
-    data = load_data()
-    if not data or not data.get("documentos"):
-        raise RuntimeError("A base de documentos ainda não está disponível.")
-
-    candidates = find_documents_for_matricula(data, matricula)
-    if not candidates:
-        return {
-            "ok": True,
-            "matricula": matricula,
-            "perfil": {k: ("24 × 72" if k == "jornada" else "") for k in (
-                "nome", "graduacao", "funcao", "servico", "viatura", "equipe", "horario", "jornada"
-            )},
-            "resultados": [],
-            "documentos_com_ocorrencia": 0,
-            "fonte": data.get("fonte", PROCESS_URL),
-            "atualizado_em": data.get("atualizado_em", ""),
-        }
-
-    # One combined PDF is enough if it is the only source available. Otherwise prefer
-    # the exact PDFs referenced by the cache, which keeps the model focused.
-    selected = []
-    seen = set()
-    for document in candidates:
-        path = find_pdf_for_document(document)
-        if not path:
-            continue
-        key = str(path.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        selected.append((document, path))
-
-    if not selected:
-        raise RuntimeError(
-            "Encontrei a matrícula na base, mas os PDFs originais não estão no servidor. "
-            "Coloque os PDFs das escalas em data/escalas27/ ou data/pdfs/."
-        )
-
-    client = get_client()
-    file_cache = load_openai_file_cache()
-    contents = []
-
-    metadata_lines = [
-        f"MATRÍCULA SOLICITADA: {matricula}",
-        "DOCUMENTOS CANDIDATOS:",
-    ]
-
-    for document, path in selected:
-        file_id = upload_or_get_file_id(client, path, file_cache)
-        metadata_lines.append(
-            f"- arquivo={path.name}; id_documento={document.get('id','')}; "
-            f"titulo={document.get('titulo','')}; arquivo_cache={document.get('arquivo','')}"
-        )
-        contents.append({"type": "input_file", "file_id": file_id})
-
-    contents.append({
-        "type": "input_text",
-        "text": (
-            "Analise os PDFs anexados. "
-            "A matrícula a localizar é exatamente " + matricula + ".\n\n" +
-            "\n".join(metadata_lines) +
-            "\n\nAssocie cada resultado ao id_documento/título correspondente informado acima."
-        ),
-    })
-
-    response = client.responses.create(
-        model=OPENAI_MODEL,
-        instructions=INSTRUCTIONS,
-        input=[{"role": "user", "content": contents}],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "minhas_escalas_result",
-                "strict": True,
-                "schema": SCHEMA,
-            }
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config={
+            "temperature": 0,
+            "response_mime_type": "application/json",
         },
     )
 
-    raw = response.output_text
+    return json.loads(response.text)
+
+
+def consult(matricula):
+    original = clean(matricula)
+    normalized = norm(original)
+
+    if len(normalized) < 5:
+        return {
+            "ok": False,
+            "codigo": "MATRICULA_INVALIDA",
+            "erro": (
+                "Digite uma matrícula válida, "
+                "por exemplo 113260-1."
+            ),
+        }
+
+    data, documents = find_candidates(original)
+
+    if not data or not data.get("documentos"):
+        return {
+            "ok": False,
+            "codigo": "BASE_AINDA_NAO_ATUALIZADA",
+            "erro": (
+                "A base de escalas ainda não está "
+                "disponível."
+            ),
+        }
+
+    if not documents:
+        return {
+            "ok": True,
+            "matricula": original,
+            "matricula_normalizada": normalized,
+            "total_registros_processo": data.get(
+                "total_registros_processo",
+                0
+            ),
+            "documentos_acessiveis": data.get(
+                "documentos_acessiveis",
+                0
+            ),
+            "documentos_com_falha": data.get(
+                "documentos_com_falha",
+                0
+            ),
+            "documentos_com_ocorrencia": 0,
+            "perfil": {
+                "nome": "",
+                "graduacao": "",
+                "funcao": "",
+                "servico": "",
+                "viatura": "",
+                "equipe": "",
+                "horario": "",
+                "jornada": "24 x 72",
+            },
+            "resultados": [],
+            "fonte": data.get(
+                "fonte",
+                PROCESS_URL
+            ),
+            "atualizado_em": data.get(
+                "atualizado_em",
+                ""
+            ),
+        }
+
     try:
-        result = json.loads(raw)
+        ai_result = analyze_with_ai(
+            original,
+            documents
+        )
+
+        by_id = {
+            str(document["id"]): document
+            for document in documents
+        }
+
+        grouped = {}
+
+        for item in ai_result.get(
+            "ocorrencias",
+            []
+        ):
+            source = by_id.get(
+                str(item.get("documento", ""))
+            )
+
+            if not source:
+                continue
+
+            tipo = clean(item.get("tipo", ""))
+
+            situation_map = {
+                "Folga": "Folga",
+                "Escala de Folga": "Folga",
+                "Permuta": "Permuta",
+                "Compensação": "Compensação",
+                "Retificação": "Retificação",
+            }
+
+            situation = situation_map.get(
+                tipo,
+                "Escala"
+            )
+
+            occurrence = {
+                key: clean(item.get(key, ""))
+                for key in (
+                    "data",
+                    "servico",
+                    "equipe",
+                    "graduacao",
+                    "nome",
+                    "funcao",
+                    "viatura",
+                    "horario",
+                    "dias",
+                    "observacao",
+                )
+            }
+
+            occurrence["matricula"] = original
+            occurrence["situacao"] = situation
+            occurrence["tipo"] = tipo
+
+            if source["id"] not in grouped:
+                grouped[source["id"]] = {
+                    **source,
+                    "ocorrencias": [],
+                }
+
+            grouped[source["id"]][
+                "ocorrencias"
+            ].append(occurrence)
+
+        results = list(grouped.values())
+
+        if not results:
+            results = documents
+
+        ai_profile = ai_result.get("perfil") or {}
+
+        profile = {
+            "nome": clean(
+                ai_profile.get("nome", "")
+            ),
+            "graduacao": clean(
+                ai_profile.get("graduacao", "")
+            ),
+            "funcao": clean(
+                ai_profile.get("funcao", "")
+            ),
+            "servico": clean(
+                ai_profile.get("servico", "")
+            ),
+            "viatura": clean(
+                ai_profile.get("viatura", "")
+            ),
+            "equipe": clean(
+                ai_profile.get("equipe", "")
+            ),
+            "horario": clean(
+                ai_profile.get("horario", "")
+            ),
+            "jornada": clean(
+                ai_profile.get(
+                    "jornada",
+                    "24 x 72"
+                )
+            ),
+        }
+
+        return {
+            "ok": True,
+            "matricula": original,
+            "matricula_normalizada": normalized,
+            "total_registros_processo": data.get(
+                "total_registros_processo",
+                0
+            ),
+            "documentos_acessiveis": data.get(
+                "documentos_acessiveis",
+                0
+            ),
+            "documentos_com_falha": data.get(
+                "documentos_com_falha",
+                0
+            ),
+            "documentos_com_ocorrencia": len(
+                results
+            ),
+            "perfil": profile,
+            "resultados": results,
+            "fonte": data.get(
+                "fonte",
+                PROCESS_URL
+            ),
+            "atualizado_em": data.get(
+                "atualizado_em",
+                ""
+            ),
+        }
+
     except Exception as exc:
-        raise RuntimeError(f"A IA retornou uma resposta inválida: {exc}") from exc
+        return {
+            "ok": False,
+            "codigo": "GEMINI_ERRO",
+            "erro": str(exc),
+            "matricula": original,
+        }
 
-    # Server-side metadata that the model should not invent.
-    result["ok"] = True
-    result["matricula"] = matricula
-    result["documentos_com_ocorrencia"] = len(result.get("resultados", []))
-    result["fonte"] = data.get("fonte", PROCESS_URL)
-    result["atualizado_em"] = data.get("atualizado_em", "")
-    result["ai"] = True
-    result["ai_model"] = OPENAI_MODEL
-
-    # Attach known URLs/titles from the cache by document ID.
-    by_id = {str(d.get("id", "")): d for d, _ in selected}
-    for item in result.get("resultados", []):
-        doc = by_id.get(str(item.get("id", "")))
-        if doc:
-            item["titulo"] = doc.get("titulo", item.get("titulo", ""))
-            item["url"] = doc.get("url", "")
-            item["data_protocolo"] = doc.get("data_protocolo", "")
-            item["documento_data"] = doc.get("documento_data", "")
-
-    return result
-
-
-# ----------------------------- HTTP -----------------------------
 
 @app.get("/")
 def home():
-    return send_from_directory(BASE_DIR, "index.html")
+    return send_from_directory(
+        BASE_DIR,
+        "index.html"
+    )
 
 
 @app.get("/health")
 def health():
     data = load_data()
+
     return jsonify({
         "ok": True,
-        "service": "minhas-escalas-ai",
-        "version": "9.0-ai",
-        "base_pronta": bool(data and data.get("documentos")),
-        "documentos": data.get("documentos_acessiveis", 0) if data else 0,
-        "ia_configurada": bool(os.environ.get("OPENAI_API_KEY")),
-        "modelo": OPENAI_MODEL,
-        "atualizado_em": data.get("atualizado_em", "") if data else "",
+        "service": "minhas-escalas",
+        "version": "6.0-gemini",
+        "base_pronta": bool(
+            data and data.get("documentos")
+        ),
+        "gemini_configurado": bool(
+            os.environ.get("GEMINI_API_KEY")
+        ),
+        "documentos": (
+            data.get(
+                "documentos_acessiveis",
+                0
+            )
+            if data
+            else 0
+        ),
+        "atualizado_em": (
+            data.get(
+                "atualizado_em",
+                ""
+            )
+            if data
+            else ""
+        ),
     })
 
 
 @app.get("/api/consultar")
 def api_consultar():
-    matricula = clean(request.args.get("matricula", ""))
-    if len(norm(matricula)) < 5:
-        return jsonify({
-            "ok": False,
-            "codigo": "MATRICULA_INVALIDA",
-            "erro": "Digite uma matrícula válida, por exemplo 113260-1.",
-        }), 400
-
-    try:
-        return jsonify(ai_consult(matricula))
-    except Exception as exc:
-        return jsonify({
-            "ok": False,
-            "codigo": "IA_CONSULTA_ERRO",
-            "erro": str(exc),
-        }), 503
+    return jsonify(
+        consult(
+            request.args.get(
+                "matricula",
+                ""
+            )
+        )
+    )
 
 
 @app.get("/api/status")
 def api_status():
     data = load_data()
+
+    if not data:
+        return jsonify({
+            "ok": False,
+            "base_pronta": False,
+            "mensagem": (
+                "Base ainda não atualizada."
+            ),
+        })
+
     return jsonify({
-        "ok": bool(data),
-        "base_pronta": bool(data and data.get("documentos")),
-        "version": "9.0-ai",
-        "processo": data.get("processo", "") if data else "",
-        "total_registros_processo": data.get("total_registros_processo", 0) if data else 0,
-        "documentos_acessiveis": data.get("documentos_acessiveis", 0) if data else 0,
-        "documentos_com_falha": data.get("documentos_com_falha", 0) if data else 0,
-        "atualizado_em": data.get("atualizado_em", "") if data else "",
-        "ia_configurada": bool(os.environ.get("OPENAI_API_KEY")),
-        "modelo": OPENAI_MODEL,
+        "ok": True,
+        "base_pronta": bool(
+            data.get("documentos")
+        ),
+        "version": "6.0-gemini",
+        "processo": data.get(
+            "processo",
+            ""
+        ),
+        "total_registros_processo": data.get(
+            "total_registros_processo",
+            0
+        ),
+        "documentos_acessiveis": data.get(
+            "documentos_acessiveis",
+            0
+        ),
+        "documentos_com_falha": data.get(
+            "documentos_com_falha",
+            0
+        ),
+        "gemini_configurado": bool(
+            os.environ.get("GEMINI_API_KEY")
+        ),
+        "atualizado_em": data.get(
+            "atualizado_em",
+            ""
+        ),
+    })
+
+
+@app.get("/test-sei")
+def test_sei():
+    data = load_data()
+
+    if not data:
+        return jsonify({
+            "ok": False,
+            "base_pronta": False,
+            "mensagem": (
+                "O arquivo data/sei_cache.json "
+                "não está disponível no servidor."
+            ),
+        }), 503
+
+    return jsonify({
+        "ok": True,
+        "base_pronta": bool(
+            data.get("documentos")
+        ),
+        "mensagem": (
+            "O servidor está funcionando e "
+            "a base local de escalas está disponível."
+        ),
+        "documentos": len(
+            data.get("documentos", [])
+        ),
+        "total_registros_processo": data.get(
+            "total_registros_processo",
+            0
+        ),
+        "atualizado_em": data.get(
+            "atualizado_em",
+            ""
+        ),
+        "fonte": data.get(
+            "fonte",
+            PROCESS_URL
+        ),
+        "gemini_configurado": bool(
+            os.environ.get("GEMINI_API_KEY")
+        ),
     })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=int(
+            os.environ.get("PORT", 5000)
+        ),
+        debug=False
+    )
