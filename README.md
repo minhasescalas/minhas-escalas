@@ -1,40 +1,33 @@
-# Minhas Escalas — V4
+# Minhas Escalas — V5
 
-Versão preparada para hospedagem em um Web Service Python (ex.: Render).
+Versão que separa a **atualização do SEI** da **consulta do usuário**.
 
-## Como funciona
+## Arquitetura
 
-1. `index.html` é a interface.
-2. `server.py` consulta o processo público do SEI.
-3. O servidor lista os documentos acessíveis do processo e pesquisa a matrícula em paralelo.
-4. A matrícula pode ser digitada com ou sem hífen.
-5. O resultado mostra os documentos onde houve ocorrência e links para abrir o documento original no SEI.
-6. O servidor mantém em cache a lista de documentos por 10 minutos para evitar consultas desnecessárias ao processo.
+- `updater.py`: roda no GitHub Actions, acessa o processo público do SEI/PMPE e grava `data/sei_cache.json`.
+- `.github/workflows/atualizar-sei.yml`: executa manualmente ou 4 vezes por dia.
+- `server.py`: não acessa o SEI; consulta somente o cache local.
+- `index.html`: interface pública.
 
-## Rodar no computador
+Se o SEI ficar indisponível durante uma atualização, o workflow falha e o cache anterior permanece intacto.
 
-Instale Python 3.13 e execute:
+## Fluxo
 
-```bash
-pip install -r requirements.txt
-python server.py
-```
+SEI/PMPE → GitHub Actions → `data/sei_cache.json` → GitHub → Render → usuário
 
-Depois abra `http://127.0.0.1:5000`.
+O `GITHUB_TOKEN` recebe somente `contents: write`, necessário para o workflow gravar a atualização no próprio repositório.
 
-## Publicar no Render
+## Primeira atualização
 
-O projeto já inclui `render.yaml`.
+Depois de enviar os arquivos ao GitHub:
 
-1. Crie um repositório no GitHub e envie estes arquivos para a raiz do repositório.
-2. No Render, crie um **Web Service** e conecte o repositório.
-3. Use o plano Free.
-4. O Build Command é `pip install -r requirements.txt`.
-5. O Start Command é `gunicorn --bind 0.0.0.0:$PORT server:app`.
-6. Após o deploy, o Render fornecerá uma URL `onrender.com`.
+1. Abra a aba **Actions** do repositório.
+2. Abra **Atualizar escalas do SEI**.
+3. Toque em **Run workflow**.
+4. Aguarde a execução terminar com ✓.
+5. O workflow só cria um commit se houver alteração nos dados.
+6. O Render então fará o deploy do novo cache, se o auto-deploy estiver habilitado.
 
-## Observação importante
+## Observação
 
-O processo público informa 31 registros, mas nem todos os registros necessariamente possuem um link de documento acessível na página externa. A V4 pesquisa todos os documentos que o acesso externo efetivamente disponibiliza e informa no resultado quantos foram acessíveis.
-
-O serviço gratuito do Render pode dormir após período de inatividade e ter um primeiro acesso mais lento.
+O processo informado nesta versão é público e corresponde ao processo de escalas de setembro de 2026. Se o processo/URL mudar em outro mês, altere `SEI_PROCESS_URL` no `updater.py` ou configure a variável de ambiente no workflow.
