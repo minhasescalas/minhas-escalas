@@ -26,7 +26,7 @@ PROCESS_URL = os.getenv(
 )
 BASE_DIR = Path(__file__).resolve().parent
 OUT = BASE_DIR / "data" / "sei_cache.json"
-CONNECT_TIMEOUT = 10
+CONNECT_TIMEOUT = 30
 READ_TIMEOUT = 35
 MAX_WORKERS = 4
 HEADERS = {
