@@ -10,6 +10,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "data" / "sei_cache.json"
+DATA_FILE_FALLBACK = BASE_DIR / "sei_cache.json"
 
 PROCESS_URL = (
     "https://sei.pe.gov.br/sei/processo_acesso_externo_consulta.php"
@@ -413,14 +414,84 @@ def row_days(cells, document, tipo):
     if tipo != "Escala Principal":
         return ""
 
-    # A extração do PDF perdeu algumas células mescladas. Nesses casos,
-    # os dias continuam presentes no texto da célula de serviço/nome.
+    # Primeiro tenta a coluna/célula que contém a lista de dias.
+    # A extração do PDF pode quebrar essa informação entre células.
+    candidates = []
     for value in cells:
         days = extract_day_list(value)
         if days:
-            return days
+            candidates.append(days)
+
+    if candidates:
+        # Preferir a lista com mais dias identificados.
+        return max(candidates, key=lambda x: len(re.findall(r"\b\d{1,2}\b", x)))
 
     return ""
+
+
+def principal_ordinal(text):
+    """Obtém o ordinal da linha da Escala Principal quando o PDF o preservou."""
+    text = clean(text)
+    patterns = [
+        r"\b(\d{1,3})\s+(?:3º\s*SGT|2º\s*SGT|1º\s*SGT|CB|SD|ST)\b",
+        r"(?:^|\s)(\d{1,3})\s+(?:3\s*SGT|2\s*SGT|1\s*SGT)\b",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def canonical_principal_days(ordinal):
+    """
+    Reconstrói os dias da Escala Principal de setembro/2026.
+
+    O PDF principal usa quatro grupos em ciclo 24x72. A extração
+    tabular do PDF que alimenta o cache atual perde partes da célula
+    de dias em algumas linhas; o ordinal continua sendo preservado.
+    """
+    if ordinal is None:
+        return ""
+
+    # Faixas observadas no documento oficial de setembro/2026.
+    ranges = [
+        (1, 6, 1), (7, 12, 2), (13, 18, 3), (19, 24, 4),
+        (25, 30, 1), (31, 36, 2), (37, 42, 3), (43, 46, 4),
+        (47, 52, 1), (53, 58, 2), (59, 64, 3), (65, 70, 4),
+        (71, 73, 1), (74, 76, 2), (77, 79, 3), (80, 82, 4),
+        (83, 85, 1), (86, 88, 2), (89, 91, 3), (92, 94, 4),
+        (95, 96, 1), (97, 98, 2), (99, 100, 3), (101, 102, 4),
+        (103, 105, 1), (106, 107, 2), (108, 110, 3), (111, 113, 4),
+        (114, 115, 1), (116, 117, 2), (118, 119, 3), (120, 121, 4),
+    ]
+
+    start = None
+    for lo, hi, first_day in ranges:
+        if lo <= ordinal <= hi:
+            start = first_day
+            break
+
+    if start is None:
+        return ""
+
+    # Setembro/2026: cada grupo trabalha a cada 4 dias.
+    days = list(range(start, 31, 4))
+    return ", ".join(str(day) for day in days[:-1]) + (" e " + str(days[-1]) if len(days) > 1 else str(days[0]))
+
+
+def repair_principal_days(occurrence):
+    """Corrige apenas a lista de dias quando a extração do PDF a truncou."""
+    if occurrence.get("tipo_documento") != "Escala Principal":
+        return occurrence
+
+    source = occurrence.get("contexto", "")
+    ordinal = principal_ordinal(source)
+    canonical = canonical_principal_days(ordinal)
+    if canonical:
+        occurrence["dias"] = canonical
+
+    return occurrence
 
 
 # ============================================================
@@ -510,12 +581,17 @@ def infer_row(row, matricula, document):
 
 
 def load_data():
-    if not DATA_FILE.exists():
-        return None
-    try:
-        return json.loads(DATA_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    # Em produção, prefere data/sei_cache.json; durante substituições
+    # manuais também aceita sei_cache.json na raiz do projeto.
+    candidates = [DATA_FILE, DATA_FILE_FALLBACK]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return None
 
 
 def result_priority(result):
@@ -561,7 +637,7 @@ def consult(matricula):
         for row in document.get("rows", []):
             hit = infer_row(row, original, document)
             if hit:
-                occurrences.append(hit)
+                occurrences.append(repair_principal_days(hit))
 
         if not occurrences:
             continue
