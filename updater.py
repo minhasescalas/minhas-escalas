@@ -26,8 +26,8 @@ PROCESS_URL = os.getenv(
 )
 BASE_DIR = Path(__file__).resolve().parent
 OUT = BASE_DIR / "data" / "sei_cache.json"
-CONNECT_TIMEOUT = 30
-READ_TIMEOUT = 35
+CONNECT_TIMEOUT = 60
+READ_TIMEOUT = 60
 MAX_WORKERS = 4
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128 Safari/537.36 MinhasEscalas/5.0",
