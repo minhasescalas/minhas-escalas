@@ -19,19 +19,46 @@ PROCESS_URL = (
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
 
-GRADE_RE = r"(?:1º\s*SGT|2º\s*SGT|3º\s*SGT|ST|CB|SD)"
-PERSON_RE = re.compile(
-    rf"(?P<graduacao>{GRADE_RE})\s*"
-    r"(?P<matricula>\d{6}-\d)\s*"
-    rf"(?P<nome>.*?)(?=\s+{GRADE_RE}\s*\d{6}-\d\b|$)",
-    re.I,
-)
+
+# ============================================================
+# UTILITÁRIOS
+# ============================================================
 
 MONTHS = {
-    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
-    "abril": 4, "maio": 5, "junho": 6, "julho": 7,
-    "agosto": 8, "setembro": 9, "outubro": 10,
-    "novembro": 11, "dezembro": 12,
+    "janeiro": 1,
+    "fevereiro": 2,
+    "março": 3,
+    "marco": 3,
+    "abril": 4,
+    "maio": 5,
+    "junho": 6,
+    "julho": 7,
+    "agosto": 8,
+    "setembro": 9,
+    "outubro": 10,
+    "novembro": 11,
+    "dezembro": 12,
+}
+
+GRADE_NAMES = {
+    "SD": "SD — Soldado",
+    "CB": "CB — Cabo",
+    "3º SGT": "3º SGT — Terceiro-Sargento",
+    "3 SGT": "3º SGT — Terceiro-Sargento",
+    "3ºSGT": "3º SGT — Terceiro-Sargento",
+    "2º SGT": "2º SGT — Segundo-Sargento",
+    "2 SGT": "2º SGT — Segundo-Sargento",
+    "2ºSGT": "2º SGT — Segundo-Sargento",
+    "1º SGT": "1º SGT — Primeiro-Sargento",
+    "1 SGT": "1º SGT — Primeiro-Sargento",
+    "1ºSGT": "1º SGT — Primeiro-Sargento",
+    "ST": "ST — Subtenente",
+}
+
+FUNCTION_NAMES = {
+    "CMT": "CMT — Comandante",
+    "PAT": "PAT — Patrulheiro",
+    "MOT": "MOT — Motociclista",
 }
 
 
@@ -43,6 +70,500 @@ def norm(value):
     return re.sub(r"\D", "", str(value or ""))
 
 
+def esc_text(value):
+    return clean(value).replace("\u200b", "")
+
+
+def matricula_pattern(matricula):
+    target = norm(matricula)
+    if len(target) < 5:
+        return ""
+
+    if len(target) == 7:
+        return (
+            rf"(?<!\d){re.escape(target[:6])}"
+            rf"\s*[-/.]?\s*{re.escape(target[6])}(?!\d)"
+        )
+
+    return rf"(?<!\d){re.escape(target)}(?!\d)"
+
+
+def matricula_matches(text, matricula):
+    pattern = matricula_pattern(matricula)
+    return bool(pattern and re.search(pattern, str(text or ""), re.I))
+
+
+def row_belongs_to_matricula(cells, matricula):
+    """A coluna de matrícula (posição 4) é a fonte principal.
+
+    Isso evita falsos positivos causados pelo campo 'contexto', que em
+    alguns documentos contém trechos de várias linhas da tabela.
+    """
+    target = norm(matricula)
+
+    if len(cells) > 4:
+        cell = norm(cells[4])
+        if cell:
+            return cell == target
+
+    return matricula_matches(" | ".join(cells), matricula)
+
+
+# ============================================================
+# DOCUMENTO / MÊS / TIPO
+# ============================================================
+
+
+def document_period(document):
+    text = clean(document.get("titulo", ""))
+    m = re.search(
+        r"(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|"
+        r"setembro|outubro|novembro|dezembro)\s+de\s+(20\d{2})",
+        text,
+        re.I,
+    )
+    if m:
+        month = MONTHS[m.group(1).lower()]
+        year = int(m.group(2))
+        return month, year
+
+    for value in (
+        document.get("documento_data", ""),
+        document.get("data_protocolo", ""),
+    ):
+        m = re.search(r"(\d{2})/(\d{2})/(20\d{2})", str(value or ""))
+        if m:
+            return int(m.group(2)), int(m.group(3))
+
+    return None, None
+
+
+def full_date_from_day(day, document):
+    day = clean(day)
+    m = re.search(r"\b(0?[1-9]|[12]\d|3[01])\b", day)
+    if not m:
+        return ""
+
+    month, year = document_period(document)
+    if not month or not year:
+        return ""
+
+    try:
+        d = int(m.group(1))
+        datetime(year, month, d)
+        return f"{d:02d}/{month:02d}/{year}"
+    except ValueError:
+        return ""
+
+
+def classify_occurrence(document, cells):
+    """Classifica cada ocorrência, não a pessoa.
+
+    Regras gerais:
+    - documento 'Escala Principal' -> Escala Principal;
+    - permuta -> Permuta de Serviço;
+    - 'compensação de horas' / 'concessão do CMT' -> Escala de Folga;
+    - registros de serviço efetivo -> Escala de Serviço;
+    - restante -> Escala de Serviço.
+
+    Assim a mesma matrícula pode ter registros de tipos diferentes,
+    sem qualquer regra específica para uma pessoa.
+    """
+    title = clean(document.get("titulo", ""))
+    text = " | ".join(cells).upper()
+
+    if re.search(r"ESCALA\s+PRINCIPAL", title, re.I):
+        return "Escala Principal"
+
+    if re.search(r"PERMUTA", title, re.I) or re.search(
+        r"ESCALA\s+A\s+(?:ATUAL|SER\s+CUMPRIDA)", text, re.I
+    ):
+        return "Permuta de Serviço"
+
+    if re.search(r"CONCESS(?:ÃO|ÂO)|CONCES(?:ÃO|ÂO)", text, re.I):
+        return "Escala de Folga"
+
+    if re.search(r"COMPENSAÇÃO\s+DE\s+HORAS", text, re.I):
+        return "Escala de Folga"
+
+    return "Escala de Serviço"
+
+
+# ============================================================
+# CAMPOS
+# ============================================================
+
+
+def normalize_grade(value):
+    value = clean(value)
+    if not value:
+        return ""
+
+    key = re.sub(r"\s+", " ", value.upper())
+    return GRADE_NAMES.get(key, value)
+
+
+def normalize_function(value):
+    value = clean(value)
+    if not value:
+        return ""
+    return FUNCTION_NAMES.get(value.upper(), value)
+
+
+def extract_function(text):
+    text = str(text or "")
+    m = re.search(r"\((CMT|PAT|MOT)\)", text, re.I)
+    if m:
+        return m.group(1).upper()
+
+    # Só usar CMT/PAT/MOT isolado quando houver uma indicação de que
+    # ele pertence ao registro, evitando capturar palavras do contexto.
+    m = re.search(r"\b(CMT|PAT|MOT)\b", text, re.I)
+    return m.group(1).upper() if m else ""
+
+
+def extract_grade(text):
+    text = str(text or "")
+    patterns = [
+        r"\b(3º\s*SGT|2º\s*SGT|1º\s*SGT)\b",
+        r"\b(3\s*SGT|2\s*SGT|1\s*SGT)\b",
+        r"\b(3ºSGT|2ºSGT|1ºSGT)\b",
+        r"\b(CB|SD|ST)\b",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            return normalize_grade(m.group(1))
+    return ""
+
+
+def normalize_service(value):
+    value = esc_text(value)
+    if not value:
+        return ""
+
+    # Retirar matrícula/graduação/função que eventualmente foram
+    # incorporadas ao texto da célula por causa de células mescladas.
+    value = re.sub(
+        r"\b(?:3º?\s*SGT|2º?\s*SGT|1º?\s*SGT|CB|SD|ST)\s+"
+        r"\d{6}[-/.]?\d\b",
+        "",
+        value,
+        flags=re.I,
+    )
+    value = re.sub(r"\b\d{6}[-/.]?\d\b", "", value)
+    value = re.sub(r"\b(?:CMT|PAT|MOT)\b", "", value, flags=re.I)
+    value = re.sub(r"\([^)]*\)", "", value)
+
+    # Remover dias/horários que podem ter sido anexados à célula.
+    value = re.sub(
+        r"\b(?:0?[1-9]|[12]\d|3[01])(?:\s*,\s*(?:0?[1-9]|[12]\d|3[01]))+"
+        r"(?:\s*(?:e|,)\s*(?:0?[1-9]|[12]\d|3[01]))?\s*\.?",
+        "",
+        value,
+    )
+    value = re.sub(r"\b\d{1,2}h\d{0,2}\s*/\s*\d{1,2}h\d{0,2}\b", "", value, flags=re.I)
+
+    value = re.sub(r"M\.?\s*O\.?\s*T[ÁA]TICO", "MO Tático", value, flags=re.I)
+    value = re.sub(r"M\.?\s*O\.?\s*(\d+(?:\.\d+)?)", r"M.O. \1", value, flags=re.I)
+    value = re.sub(r"\s*-\s*M\.?\s*O\.?\s*", " — M.O. ", value, flags=re.I)
+
+    return clean(value).strip(" -—,.")
+
+
+def extract_vehicle(text):
+    text = str(text or "")
+    found = []
+
+    patterns = [
+        (r"M\.?\s*O\.?\s*(?:T[ÁA]TICO\s*[-—]?\s*)?(\d+(?:\.\d+)?)", "M.O."),
+        (r"\bGT\s*[-—]?\s*(\d+(?:\.\d+)?)", "GT"),
+        (r"\bPCR\s*[-—]?\s*(\d+(?:\.\d+)?)", "PCR"),
+    ]
+
+    for pattern, prefix in patterns:
+        for m in re.finditer(pattern, text, re.I):
+            item = f"{prefix} {m.group(1)}"
+            if item not in found:
+                found.append(item)
+
+    return ", ".join(found)
+
+
+def normalize_time(value):
+    value = clean(value)
+    if not value:
+        return ""
+
+    value = re.sub(r"\s*(?:/|às|as)\s*", " às ", value, flags=re.I)
+    value = re.sub(r"\b(\d{1,2})h(\d{1,2})\b", lambda m: f"{int(m.group(1)):02d}h{m.group(2)}", value, flags=re.I)
+    value = re.sub(r"\b(\d{1,2})h\b", lambda m: f"{int(m.group(1)):02d}h", value, flags=re.I)
+    return clean(value)
+
+
+def extract_time(text):
+    text = str(text or "")
+    patterns = [
+        r"\b\d{1,2}h\d{0,2}\s*/\s*\d{1,2}h\d{0,2}\b",
+        r"\b\d{1,2}h\d{0,2}\s*(?:às|as|-)\s*\d{1,2}h\d{0,2}\b",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.I)
+        if m:
+            return normalize_time(m.group(0))
+    return ""
+
+
+def extract_day_list(text):
+    text = clean(text)
+
+    patterns = [
+        r"(?<!\d)((?:0?[1-9]|[12]\d|3[01])(?:\s*,\s*(?:0?[1-9]|[12]\d|3[01]))+"
+        r"(?:\s*(?:e|,)\s*(?:0?[1-9]|[12]\d|3[01]))?)(?:\s*\.)?",
+        r"(?<!\d)((?:0?[1-9]|[12]\d|3[01])(?:\s+|\s*,\s*)(?:0?[1-9]|[12]\d|3[01])"
+        r"(?:\s*(?:,|e)\s*(?:0?[1-9]|[12]\d|3[01]))+)(?:\s*\.)?",
+    ]
+
+    found = []
+    for pattern in patterns:
+        found.extend(re.findall(pattern, text, re.I))
+
+    if not found:
+        return ""
+
+    # Preferir o maior agrupamento de dias, normalmente o da escala.
+    best = max(found, key=lambda x: len(re.findall(r"\b\d{1,2}\b", x)))
+    return clean(best).replace(" ,", ",")
+
+
+def extract_name(cells, matricula):
+    if len(cells) > 5 and norm(cells[4]) == norm(matricula):
+        name = esc_text(cells[5])
+        if name:
+            # Remover função e anotações de dias/horários que grudaram no nome.
+            name = re.sub(r"\s*\((?:CMT|PAT|MOT)\).*", "", name, flags=re.I)
+            name = re.sub(r"\s+(?:\d{1,2}(?:\s*,\s*\d{1,2})+|e\s+\d{1,2}).*$", "", name, flags=re.I)
+            name = re.sub(r"\s+(?:concessão|concessâo|compensação).*$", "", name, flags=re.I)
+            name = re.sub(r"\s*\*a/c.*$", "", name, flags=re.I)
+            return clean(name)
+
+    text = " | ".join(cells)
+    p = matricula_pattern(matricula)
+    if p:
+        m = re.search(
+            rf"{p}\s+([A-ZÀ-Ú][A-ZÀ-Ú .'-]{{2,}}?)(?:\s*\((?:CMT|PAT|MOT)\)|\s+(?:CMT|PAT|MOT)\b)",
+            text,
+            re.I,
+        )
+        if m:
+            return clean(m.group(1))
+
+    return ""
+
+
+def extract_team(text):
+    for team in ("ALFA", "BRAVO", "CHARLIE", "DELTA"):
+        if re.search(rf"\b{team}\b", str(text or ""), re.I):
+            return team
+    m = re.search(r"\bequipe\s+([A-ZÀ-Ú0-9_-]+)", str(text or ""), re.I)
+    return clean(m.group(1)).upper() if m else ""
+
+
+def extract_observation(text):
+    text = clean(text)
+    found = []
+    patterns = [
+        r"CONCESS(?:ÃO|ÂO)\s+DO\s+CMT",
+        r"COMPENSAÇÃO\s+DE\s+HORAS",
+        r"MUDANÇA\s+DE\s+OME",
+        r"REMANEJADO(?:\s+PARA\s+O\s+DIA)?[^|;]*",
+        r"VIAGEM",
+        r"A/C[^|;]*",
+        r"ESCALA\s+ESPECÍFICA",
+    ]
+    for pattern in patterns:
+        for m in re.finditer(pattern, text, re.I):
+            item = clean(m.group(0))
+            if item and item.upper() not in {x.upper() for x in found}:
+                found.append(item)
+    return "; ".join(found)
+
+
+def row_date(cells, document):
+    # Permutas normalmente têm a data completa na coluna de dia.
+    if len(cells) > 6:
+        value = clean(cells[6])
+        m = re.search(r"\b\d{1,2}/\d{1,2}/20\d{2}\b", value)
+        if m:
+            return m.group(0)
+
+        # Escalas mensais: a coluna contém o dia do serviço.
+        if re.fullmatch(r"\d{1,2}", value):
+            return full_date_from_day(value, document)
+
+    text = " | ".join(cells)
+    m = re.search(r"\b\d{1,2}/\d{1,2}/20\d{2}\b", text)
+    if m:
+        return m.group(0)
+
+    return ""
+
+
+def row_days(cells, document, tipo):
+    if tipo != "Escala Principal":
+        return ""
+
+    # A extração do PDF perdeu algumas células mescladas. Nesses casos,
+    # os dias continuam presentes no texto da célula de serviço/nome.
+    for value in cells:
+        days = extract_day_list(value)
+        if days:
+            return days
+
+    return ""
+
+
+# ============================================================
+# INFERÊNCIA DE UMA LINHA
+# ============================================================
+
+
+def context_for_matricula(text, matricula):
+    """Retorna um pequeno trecho do contexto imediatamente após a matrícula.
+
+    Alguns PDFs do SEI perdem a associação correta das colunas ao serem
+    convertidos para texto. Nesses casos o campo da linha pode dizer uma
+    coisa, enquanto o contexto original da tabela contém a data/horário
+    corretos da matrícula.
+    """
+    text = str(text or "")
+    pattern = matricula_pattern(matricula)
+    if not pattern:
+        return ""
+    matches = list(re.finditer(pattern, text, re.I))
+    if not matches:
+        return ""
+    # Quando a linha contém a matrícula duas vezes, a última ocorrência
+    # costuma estar no campo de contexto completo do PDF.
+    m = matches[-1]
+    return clean(text[m.end():m.end() + 180])
+
+
+def context_day_time(text, matricula, document):
+    """Extrai dia e horário do contexto da própria matrícula, quando possível."""
+    ctx = context_for_matricula(text, matricula)
+    if not ctx:
+        return "", ""
+
+    # O contexto dos PDFs costuma vir como: NOME 21 08h00/08h00 ...
+    m = re.search(
+        r"^[^|]{0,100}?\b(0?[1-9]|[12]\d|3[01])\b\s+"
+        r"(\d{1,2}h\d{0,2}\s*/\s*\d{1,2}h\d{0,2})",
+        ctx,
+        re.I,
+    )
+    if not m:
+        return "", ""
+
+    day = full_date_from_day(m.group(1), document)
+    return day, normalize_time(m.group(2))
+
+
+def infer_row(row, matricula, document):
+    if not isinstance(row, (list, tuple)):
+        return None
+    cells = [esc_text(x) for x in row]
+    try:
+        if not row_belongs_to_matricula(cells, matricula):
+            return None
+    except Exception:
+        return None
+
+    text = " | ".join(x for x in cells if x)
+    tipo = classify_occurrence(document, cells)
+
+    grade = normalize_grade(cells[3]) if len(cells) > 3 else ""
+    name = extract_name(cells, matricula)
+    function = extract_function(cells[8] if len(cells) > 8 and cells[8] else (cells[5] if len(cells) > 5 else ""))
+    service = normalize_service(cells[0] if cells else "")
+    vehicle = extract_vehicle(text)
+    team = extract_team(text)
+    time = normalize_time(cells[7]) if len(cells) > 7 else ""
+    date = row_date(cells, document)
+    days = row_days(cells, document, tipo)
+    observation = extract_observation(text)
+
+    # Correção importante para PDFs com células deslocadas/mescladas:
+    # quando a linha contém uma data/horário que contradiz o contexto da
+    # própria matrícula, preferir o contexto original da tabela.
+    ctx_day, ctx_time = context_day_time(text, matricula, document)
+    if ctx_day and tipo != "Escala Principal":
+        date = ctx_day
+    if ctx_time and tipo != "Escala Principal":
+        time = ctx_time
+
+    if not grade:
+        grade = extract_grade(cells[5] if len(cells) > 5 else text)
+    if not name:
+        name = extract_name(cells, matricula)
+    if not function:
+        function = extract_function(text)
+    if not time:
+        time = extract_time(text)
+    if not vehicle:
+        vehicle = extract_vehicle(cells[0] if cells else text)
+    if not team:
+        team = extract_team(cells[1] if len(cells) > 1 else text)
+
+    if not service:
+        # Prefer the first cell, mas use padrões conhecidos no contexto.
+        m = re.search(
+            r"((?:MO\s*T[ÁA]TICO|GE\s*T[ÁA]TICO|GT|GTR|CURSO\s+APH)[^|;]*?)"
+            r"(?=\s+(?:\d{1,2}h|\d{1,2}/\d{1,2}/20\d{2})|$)",
+            text,
+            re.I,
+        )
+        if m:
+            service = normalize_service(m.group(1))
+
+    if not date and tipo != "Escala Principal":
+        date = document.get("documento_data") or document.get("data_protocolo") or ""
+
+    situation = {
+        "Escala Principal": "Regular",
+        "Escala de Folga": "Folga",
+        "Escala de Serviço": "Escala de Serviço",
+        "Permuta de Serviço": "Permuta",
+    }.get(tipo, tipo)
+
+    # Se houver uma indicação explícita de situação especial, preservá-la.
+    if re.search(r"ESCALA\s+ESPECÍFICA", text, re.I):
+        situation = "Escala Específica"
+
+    return {
+        "data": date,
+        "servico": service,
+        "equipe": team,
+        "graduacao": grade,
+        "matricula": matricula,
+        "nome": name,
+        "funcao": normalize_function(function),
+        "viatura": vehicle,
+        "horario": time,
+        "dias": days,
+        "observacao": observation,
+        "situacao": situation,
+        "tipo_documento": tipo,
+        "titulo_exibicao": tipo,
+        "contexto": text,
+    }
+
+
+# ============================================================
+# CACHE / CONSULTA
+# ============================================================
+
+
 def load_data():
     if not DATA_FILE.exists():
         return None
@@ -52,259 +573,28 @@ def load_data():
         return None
 
 
-def extract_vehicles(value):
-    found = re.findall(
-        r"(?:M\.?\s*O\.?|GT|PCR)\s*\d+(?:\.\d+)?",
-        value or "",
-        re.I,
-    )
-    return [clean(x).replace("M.O", "M.O.") for x in dict.fromkeys(found)]
-
-
-def service_name(value):
-    s = clean(value)
-    s = re.sub(
-        r"\s*[-–—]?\s*(?:M\.?\s*O\.?|GT|PCR)\s*\d+(?:\.\d+)?",
-        "",
-        s,
-        flags=re.I,
-    )
-    s = clean(s).strip(" -–—")
-    return s.title() if s else ""
-
-
-def extract_function(value):
-    m = re.search(r"\((CMT|PAT|MOT)\)", value or "", re.I)
-    return m.group(1).upper() if m else ""
-
-
-def clean_name(value):
-    value = clean(value)
-    value = re.sub(r"\s*\((?:CMT|PAT|MOT)\)\s*", " ", value, flags=re.I)
-    value = re.sub(
-        r"\s*\*?\s*a/c\s+dia\s+\d{1,2}\s*",
-        " ",
-        value,
-        flags=re.I,
-    )
-    value = re.sub(
-        r"\s*\((?:compensação|compensacao|remanejado)[^)]*\)\s*",
-        " ",
-        value,
-        flags=re.I,
-    )
-    return clean(value)
-
-
-def extract_note(value):
-    value = clean(value)
-    notes = []
-    for pattern in (
-        r"\*?\s*a/c\s+dia\s+\d{1,2}",
-        r"\((?:compensação|compensacao)[^)]*\)",
-        r"\((?:remanejado[^)]*)\)",
-    ):
-        notes.extend(re.findall(pattern, value, flags=re.I))
-    return clean(" ".join(dict.fromkeys(notes)))
-
-
-def parse_people(effective):
-    people = []
-    for match in PERSON_RE.finditer(clean(effective)):
-        raw_name = clean(match.group("nome"))
-        people.append({
-            "graduacao": clean(match.group("graduacao")),
-            "matricula": clean(match.group("matricula")),
-            "nome": clean_name(raw_name),
-            "funcao": extract_function(raw_name),
-            "observacao": extract_note(raw_name),
-        })
-    return people
-
-
-def month_year(data):
-    text = clean(data.get("processo", ""))
-    m = re.search(
-        r"(janeiro|fevereiro|março|marco|abril|maio|junho|julho|"
-        r"agosto|setembro|outubro|novembro|dezembro)[^0-9]*(20\d{2})",
-        text,
-        re.I,
-    )
-    if m:
-        return MONTHS[m.group(1).lower()], int(m.group(2))
-    return 9, 2026
-
-
-def full_date(day, data):
-    m = re.search(r"\b(0?[1-9]|[12]\d|3[01])\b", clean(day))
-    if not m:
-        return ""
-    month, year = month_year(data)
-    try:
-        datetime(year, month, int(m.group(1)))
-        return f"{int(m.group(1)):02d}/{month:02d}/{year}"
-    except ValueError:
-        return ""
-
-
-def normalize_time(value):
-    return clean(value).replace("/", " às ")
-
-
-def classify_document(document, row_section=""):
-    if document.get("principal"):
-        return "Escala Principal"
-    title = clean(document.get("titulo", ""))
-    section = clean(row_section).upper()
-    if "PERMUTA" in title.upper():
-        return "Permuta de Serviço"
-    if "FOLGA" in section:
-        return "Escala de Folga"
-    if "SERVIÇO" in section or "SERVICO" in section:
-        return "Escala de Serviço"
-    if "FOLGA" in title.upper():
-        return "Escala de Folga"
-    return "Escala de Serviço"
-
-
-def parse_principal_row(row, matricula, data):
-    cells = [clean(x) for x in row.get("cells", [])]
-    if len(cells) < 8:
-        return None
-
-    mats = re.findall(r"\d{6}-\d", cells[4])
-    target = norm(matricula)
-    idx = next((i for i, m in enumerate(mats) if norm(m) == target), None)
-    if idx is None:
-        return None
-
-    grades = re.findall(GRADE_RE, cells[3], flags=re.I)
-    name_matches = re.findall(r"([^()]+?)\s*\((CMT|PAT|MOT)\)", cells[5], flags=re.I)
-
-    raw_name = ""
-    funcao = ""
-    if idx < len(name_matches):
-        raw_name = clean(name_matches[idx][0])
-        funcao = name_matches[idx][1].upper()
-
-    if not raw_name:
-        # Fallback: use the segment around the target's ordinal position.
-        raw_name = clean(cells[5])
-
-    vehicles = extract_vehicles(cells[0])
-    vehicle = vehicles[idx] if idx < len(vehicles) else ""
-    grad = grades[idx] if idx < len(grades) else ""
-
-    return {
-        "data": "",
-        "servico": service_name(cells[0]),
-        "equipe": clean(row.get("equipe", "")),
-        "graduacao": clean(grad),
-        "matricula": matricula,
-        "nome": clean_name(raw_name),
-        "funcao": funcao,
-        "viatura": vehicle,
-        "horario": normalize_time(cells[7]),
-        "dias": clean(cells[6]),
-        "observacao": extract_note(cells[5]),
-        "situacao": "Regular",
-        "tipo_documento": "Escala Principal",
-    }
-
-
-def parse_row(document, row, matricula, data):
-    cells = [clean(x) for x in row.get("cells", [])]
-    if not cells:
-        return []
-
-    text = " | ".join(cells)
-    if norm(matricula) not in norm(text):
-        return []
-
-    if document.get("principal"):
-        hit = parse_principal_row(row, matricula, data)
-        return [hit] if hit else []
-
-    # Standard SEI tables are usually:
-    # SERVIÇO | EFETIVO | DIA | HORÁRIO | SEI
-    if len(cells) < 4:
-        return []
-
-    service = cells[0]
-    effective = cells[1]
-    day = cells[2]
-    horario = cells[3]
-    section = row.get("section", "")
-    tipo = classify_document(document, section)
-    people = parse_people(effective)
-
-    # Some tables have a single person without a recognizable grade prefix.
-    if not people and norm(matricula) in norm(effective):
-        people = [{
-            "graduacao": "",
-            "matricula": matricula,
-            "nome": "",
-            "funcao": "",
-            "observacao": "",
-        }]
-
-    hits = []
-    for person in people:
-        if norm(person["matricula"]) != norm(matricula):
-            continue
-
-        observacao = clean(
-            " ".join(
-                x for x in [person.get("observacao", ""), clean(cells[4]) if len(cells) >= 5 else ""]
-                if x
-            )
-        )
-
-        situacao = {
-            "Escala de Folga": "Folga",
-            "Permuta de Serviço": "Permuta",
-        }.get(tipo, "Escala de Serviço")
-
-        hits.append({
-            "data": full_date(day, data),
-            "servico": service_name(service),
-            "equipe": "",
-            "graduacao": person.get("graduacao", ""),
-            "matricula": matricula,
-            "nome": person.get("nome", ""),
-            "funcao": person.get("funcao", ""),
-            "viatura": ", ".join(extract_vehicles(service)),
-            "horario": normalize_time(horario),
-            "dias": clean(day),
-            "observacao": observacao,
-            "situacao": situacao,
-            "tipo_documento": tipo,
-        })
-
-    return hits
-
-
-def date_key(value):
-    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", str(value or ""))
-    return (
-        int(m.group(3)), int(m.group(2)), int(m.group(1))
-    ) if m else (9999, 99, 99)
-
-
-def result_priority(tipo):
-    return {
+def result_priority(result):
+    priorities = {
         "Escala Principal": 0,
         "Escala de Folga": 1,
         "Escala de Serviço": 2,
         "Permuta de Serviço": 3,
-    }.get(tipo, 9)
+    }
+    return priorities.get(result.get("tipo_documento", ""), 9)
+
+
+def date_sort_value(value):
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", str(value or ""))
+    if m:
+        return (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    return (9999, 99, 99)
 
 
 def consult(matricula):
     original = clean(matricula)
     normalized = norm(original)
 
-    if len(normalized) < 7:
+    if len(normalized) < 5:
         return {
             "ok": False,
             "codigo": "MATRICULA_INVALIDA",
@@ -320,37 +610,62 @@ def consult(matricula):
         }
 
     resultados = []
+
     for document in data.get("documentos", []):
+        if not isinstance(document, dict):
+            continue
         occurrences = []
-        for row in document.get("rows", []):
-            occurrences.extend(parse_row(document, row, original, data))
+        rows = document.get("rows", [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            try:
+                hit = infer_row(row, original, document)
+            except Exception:
+                # Uma linha malformada não pode derrubar a consulta inteira.
+                hit = None
+            if hit:
+                occurrences.append(hit)
 
         if not occurrences:
             continue
 
-        occurrences.sort(key=lambda o: date_key(o.get("data", "")))
-        tipo = occurrences[0].get("tipo_documento", "Escala de Serviço")
+        # Ordenar ocorrências internas pela data quando existir.
+        occurrences.sort(key=lambda o: date_sort_value(o.get("data", "")))
 
-        resultados.append({
-            "id": document.get("id", ""),
-            "titulo": document.get("titulo", "Documento SEI"),
-            "tipo_documento": tipo,
-            "data_protocolo": document.get("data_protocolo", ""),
-            "documento_data": document.get("documento_data", ""),
-            "url": document.get("url", ""),
-            "ocorrencias": occurrences,
-        })
+        # Cada documento pode conter ocorrências de tipos diferentes.
+        # Agrupamos por tipo para que a interface possa exibir cada registro
+        # como uma ocorrência independente.
+        groups = {}
+        for occurrence in occurrences:
+            groups.setdefault(occurrence["tipo_documento"], []).append(occurrence)
+
+        for tipo, items in groups.items():
+            first = items[0]
+            resultados.append({
+                "id": document.get("id", ""),
+                "titulo": document.get("titulo", "Documento SEI"),
+                "titulo_exibicao": tipo,
+                "data_protocolo": document.get("data_protocolo", ""),
+                "documento_data": document.get("documento_data", ""),
+                "url": document.get("url", ""),
+                "tipo_documento": tipo,
+                "ocorrencias": items,
+            })
 
     resultados.sort(
         key=lambda r: (
-            result_priority(r.get("tipo_documento", "")),
-            min((date_key(o.get("data", "")) for o in r["ocorrencias"]), default=(9999, 99, 99)),
+            result_priority(r),
+            min(
+                [date_sort_value(o.get("data", "")) for o in r["ocorrencias"]],
+                default=(9999, 99, 99),
+            ),
             r.get("id", ""),
         )
     )
 
-    # Profile is taken preferentially from the main scale, not from later
-    # folga/service documents, so a later occurrence cannot overwrite it.
+    # Perfil: a Escala Principal tem prioridade, mas não existe nenhuma
+    # informação específica de matrícula embutida aqui.
     profile = {
         "nome": "",
         "graduacao": "",
@@ -359,26 +674,31 @@ def consult(matricula):
         "viatura": "",
         "equipe": "",
         "horario": "",
-        "jornada": data.get("jornada", "24 x 72"),
+        "jornada": "24 × 72",
     }
 
+    principal_occurrences = []
+    secondary_occurrences = []
     for result in resultados:
-        if result.get("tipo_documento") != "Escala Principal":
-            continue
-        if result["ocorrencias"]:
-            o = result["ocorrencias"][0]
-            for key in profile:
-                if key != "jornada" and o.get(key):
-                    profile[key] = o[key]
-            break
+        for occurrence in result["ocorrencias"]:
+            if occurrence.get("tipo_documento") == "Escala Principal":
+                principal_occurrences.append(occurrence)
+            else:
+                secondary_occurrences.append(occurrence)
 
-    # Fallback if the principal scale was not available.
-    if not profile["nome"]:
-        for result in resultados:
-            for o in result["ocorrencias"]:
-                for key in ("nome", "graduacao", "funcao", "servico", "viatura", "equipe", "horario"):
-                    if not profile[key] and o.get(key):
-                        profile[key] = o[key]
+    # Nome, graduação e função: a escala principal é a referência principal.
+    for occurrence in principal_occurrences + secondary_occurrences:
+        for key in ("nome", "graduacao", "funcao"):
+            if not profile[key] and occurrence.get(key):
+                profile[key] = occurrence[key]
+
+    # Serviço/viatura/equipe/horário: preferir uma ocorrência real de serviço
+    # ou folga, pois a célula mesclada da escala principal pode carregar o
+    # texto do comandante/grupo inteiro.
+    for occurrence in secondary_occurrences + principal_occurrences:
+        for key in ("servico", "viatura", "equipe", "horario"):
+            if not profile[key] and occurrence.get(key):
+                profile[key] = occurrence[key]
 
     return {
         "ok": True,
@@ -395,6 +715,10 @@ def consult(matricula):
     }
 
 
+# ============================================================
+# ROTAS
+# ============================================================
+
 @app.get("/")
 def home():
     return send_from_directory(BASE_DIR, "index.html")
@@ -406,7 +730,7 @@ def health():
     return jsonify({
         "ok": True,
         "service": "minhas-escalas",
-        "version": "8.0-deterministico",
+        "version": "8.1-deterministico",
         "base_pronta": bool(data and data.get("documentos")),
         "documentos": data.get("documentos_acessiveis", 0) if data else 0,
         "atualizado_em": data.get("atualizado_em", "") if data else "",
@@ -426,12 +750,12 @@ def api_status():
             "ok": False,
             "base_pronta": False,
             "mensagem": "Base ainda não atualizada.",
-        }), 503
+        })
 
     return jsonify({
         "ok": True,
         "base_pronta": bool(data.get("documentos")),
-        "version": "8.0-deterministico",
+        "version": "8.1-deterministico",
         "processo": data.get("processo", ""),
         "total_registros_processo": data.get("total_registros_processo", 0),
         "documentos_acessiveis": data.get("documentos_acessiveis", 0),
@@ -450,15 +774,26 @@ def test_sei():
             "mensagem": "O arquivo data/sei_cache.json não está disponível no servidor.",
         }), 503
 
+    documentos = data.get("documentos", [])
     return jsonify({
         "ok": True,
-        "base_pronta": bool(data.get("documentos")),
+        "base_pronta": bool(documentos),
         "mensagem": "O servidor está funcionando e a base local de escalas está disponível.",
-        "documentos": len(data.get("documentos", [])),
+        "documentos": len(documentos),
         "total_registros_processo": data.get("total_registros_processo", 0),
         "atualizado_em": data.get("atualizado_em", ""),
         "fonte": data.get("fonte", PROCESS_URL),
     })
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    # Nunca devolver HTML para a API: o frontend espera JSON.
+    return jsonify({
+        "ok": False,
+        "codigo": "ERRO_INTERNO",
+        "erro": f"Falha interna ao consultar a base: {type(error).__name__}: {error}",
+    }), 500
 
 
 if __name__ == "__main__":
