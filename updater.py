@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Baixa o processo público do SEI/PMPE e cria um cache local para o site.
+"""Atualiza a base local a partir do processo público do SEI/PMPE.
 
-Executado pelo GitHub Actions. Se o SEI estiver indisponível, o script falha
-sem substituir o cache anterior.
+O processo é público. O GitHub Actions executa este arquivo periodicamente,
+baixa os documentos disponíveis e grava data/sei_cache.json.
+
+Não usa IA: a classificação é baseada nas seções e tabelas presentes nos
+próprios documentos do SEI.
 """
+
 from __future__ import annotations
 
 import json
@@ -26,22 +30,27 @@ PROCESS_URL = os.getenv(
 )
 BASE_DIR = Path(__file__).resolve().parent
 OUT = BASE_DIR / "data" / "sei_cache.json"
+
 CONNECT_TIMEOUT = 60
 READ_TIMEOUT = 60
 MAX_WORKERS = 4
+
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128 Safari/537.36 MinhasEscalas/5.0",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "Chrome/128 Safari/537.36 MinhasEscalas/8.0"
+    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.6",
     "Connection": "close",
 }
 
 
-def clean(text: str) -> str:
+def clean(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def session() -> requests.Session:
+def session():
     s = requests.Session()
     retry = Retry(
         total=3,
@@ -53,112 +62,209 @@ def session() -> requests.Session:
         allowed_methods=frozenset(["GET"]),
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=4)
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=4,
+        pool_maxsize=4,
+    )
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     return s
 
 
-def fetch(url: str, referer: str | None = None) -> str:
+def fetch(url, referer=None):
     headers = dict(HEADERS)
     if referer:
         headers["Referer"] = referer
-    r = session().get(url, headers=headers, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), allow_redirects=True)
+
+    r = session().get(
+        url,
+        headers=headers,
+        timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
+        allow_redirects=True,
+    )
     r.raise_for_status()
     r.encoding = r.apparent_encoding or r.encoding
     return r.text
 
 
-def parse_process(raw: str):
+def parse_process(raw):
     soup = BeautifulSoup(raw, "html.parser")
     text = soup.get_text(" ", strip=True)
+
     m = re.search(r"Lista de Protocolos \((\d+) registros\)", text, re.I)
     total = int(m.group(1)) if m else 0
+
     docs = []
     seen = set()
+
     for a in soup.find_all("a", href=True):
         href = a.get("href", "")
         if "documento_consulta_externa.php" not in href:
             continue
+
         url = urljoin(PROCESS_URL, href)
         if url in seen:
             continue
         seen.add(url)
+
         tr = a.find_parent("tr")
         cells = []
         if tr:
-            cells = [clean(td.get_text(" / ", strip=True)) for td in tr.find_all(["td", "th"], recursive=False)]
+            cells = [
+                clean(td.get_text(" / ", strip=True))
+                for td in tr.find_all(["td", "th"], recursive=False)
+            ]
+
         label = clean(a.get_text(" ", strip=True))
         doc_id = label if re.fullmatch(r"\d+", label or "") else ""
         doc_type = cells[2] if len(cells) >= 3 else ""
         doc_date = cells[3] if len(cells) >= 4 else ""
+
         docs.append({
             "id": doc_id,
             "titulo": doc_type or f"Documento {doc_id or 'SEI'}",
             "data_protocolo": doc_date,
             "url": url,
         })
+
     return total, docs
+
+
+def table_section(table):
+    pattern = re.compile(r"DESCRIÇÃO\s*:\s*ESCALA\s+(FOLGA|SERVIÇO)", re.I)
+    for previous in table.find_all_previous(string=pattern):
+        match = pattern.search(str(previous))
+        if match:
+            return f"Escala de {match.group(1).title()}"
+    return ""
 
 
 def parse_document(doc):
     raw = fetch(doc["url"], referer=PROCESS_URL)
     soup = BeautifulSoup(raw, "html.parser")
+
     for x in soup(["script", "style", "noscript"]):
         x.decompose()
+
+    full_text = clean(soup.get_text(" ", strip=True))
+    principal = (
+        "JORNADA DE TRABALHO" in full_text.upper()
+        and "DISTRIBUIÇÃO DO EFETIVO DISPONÍVEL" in full_text.upper()
+        and "SERVIÇO/FUNÇÃO" in full_text.upper()
+        and "EQUIPE" in full_text.upper()
+    )
+
+    jornada = ""
+    jm = re.search(
+        r"JORNADA DE TRABALHO\s*:\s*([0-9]+\s*[xX×]\s*[0-9]+)",
+        full_text,
+        re.I,
+    )
+    if jm:
+        jornada = re.sub(r"\s*[xX×]\s*", " x ", jm.group(1)).strip()
+
     rows = []
-    for tr in soup.find_all("tr"):
-        cells = [clean(td.get_text(" / ", strip=True)) for td in tr.find_all(["td", "th"], recursive=False)]
-        if cells:
-            rows.append(cells)
+
+    for table in soup.find_all("table"):
+        section = table_section(table)
+
+        for tr in table.find_all("tr"):
+            cells = [
+                clean(td.get_text(" ", strip=True))
+                for td in tr.find_all(["td", "th"], recursive=False)
+            ]
+            if not cells:
+                continue
+
+            # Main scale tables have 8 columns.
+            if len(cells) >= 8:
+                rows.append({
+                    "cells": cells,
+                    "section": section,
+                    "equipe": cells[1],
+                })
+            # Daily service/folga documents normally have 4 or 5 columns.
+            elif len(cells) >= 4:
+                rows.append({
+                    "cells": cells,
+                    "section": section,
+                    "equipe": "",
+                })
+
+    # Fallback for unusual markup.
     if not rows:
-        # Fallback for documents without a conventional table.
-        for node in soup.find_all(["p", "div", "td"]):
-            t = clean(node.get_text(" ", strip=True))
-            if t:
-                rows.append([t])
-    all_text = " | ".join(" | ".join(r) for r in rows[:60])
-    m = re.search(r"(ESCALA[^|]{0,160})", all_text, re.I)
-    title = clean(m.group(1)) if m else doc["titulo"]
-    date = doc.get("data_protocolo", "")
-    dm = re.search(r"\b\d{2}/\d{2}/\d{4}\b", all_text)
-    if dm:
-        date = dm.group(0)
+        for tr in soup.find_all("tr"):
+            cells = [
+                clean(td.get_text(" ", strip=True))
+                for td in tr.find_all(["td", "th"])
+            ]
+            if cells:
+                rows.append({
+                    "cells": cells,
+                    "section": "",
+                    "equipe": "",
+                })
+
     return {
         **doc,
-        "titulo": title[:180],
-        "documento_data": date,
+        "principal": principal,
+        "jornada": jornada,
+        "documento_data": doc.get("data_protocolo", ""),
         "rows": rows,
     }
 
 
-def main() -> int:
-    print("[V5] Acessando processo SEI...", flush=True)
+def main():
+    print("[V8] Acessando processo SEI...", flush=True)
+
     raw = fetch(PROCESS_URL)
     total, docs = parse_process(raw)
-    print(f"[V5] Registros informados pelo processo: {total}; documentos com link: {len(docs)}", flush=True)
+
+    print(
+        f"[V8] Registros no processo: {total}; documentos com link: {len(docs)}",
+        flush=True,
+    )
+
     if not docs:
         raise RuntimeError("Nenhum documento acessível foi encontrado no processo SEI.")
 
     good = []
     failures = []
+
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        future_map = {pool.submit(parse_document, d): d for d in docs}
+        future_map = {
+            pool.submit(parse_document, d): d
+            for d in docs
+        }
+
         for future in as_completed(future_map):
             d = future_map[future]
             try:
                 result = future.result()
                 good.append(result)
-                print(f"[V5] OK {d.get('id')}", flush=True)
+                print(f"[V8] OK {d.get('id')}", flush=True)
             except Exception as exc:
-                failures.append({"id": d.get("id"), "url": d.get("url"), "erro": str(exc)})
-                print(f"[V5] FALHA {d.get('id')}: {exc}", flush=True)
+                failures.append({
+                    "id": d.get("id"),
+                    "url": d.get("url"),
+                    "erro": str(exc),
+                })
+                print(f"[V8] FALHA {d.get('id')}: {exc}", flush=True)
 
-    # Do not replace a previously good cache with a nearly empty result.
     if len(good) < max(1, int(len(docs) * 0.60)):
-        raise RuntimeError(f"Poucos documentos foram baixados ({len(good)}/{len(docs)}); cache anterior preservado.")
+        raise RuntimeError(
+            f"Poucos documentos foram baixados ({len(good)}/{len(docs)}); "
+            "cache anterior preservado."
+        )
 
-    good.sort(key=lambda x: (x.get("documento_data", "99/99/9999"), x.get("id", "")))
+    good.sort(
+        key=lambda x: (
+            x.get("data_protocolo", "99/99/9999"),
+            x.get("id", ""),
+        )
+    )
+
     old = {}
     if OUT.exists():
         try:
@@ -166,10 +272,20 @@ def main() -> int:
         except Exception:
             old = {}
 
+    jornada = next(
+        (
+            d.get("jornada")
+            for d in good
+            if d.get("jornada")
+        ),
+        "24 x 72",
+    )
+
     payload = {
-        "version": 5,
+        "version": 8,
         "fonte": PROCESS_URL,
         "processo": "ESCALA PELOTÃO TÁTICO SETEMBRO 2026",
+        "jornada": jornada,
         "total_registros_processo": total,
         "documentos_acessiveis": len(good),
         "documentos_com_falha": len(failures),
@@ -177,23 +293,38 @@ def main() -> int:
         "documentos": good,
     }
 
-    # Compare source data without the timestamp so unchanged data does not create a commit.
     def comparable(obj):
-        return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return json.dumps(
+            obj,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     old_cmp = dict(old) if isinstance(old, dict) else {}
     old_cmp.pop("atualizado_em", None)
+
     new_cmp = dict(payload)
     new_cmp.pop("atualizado_em", None)
 
     if comparable(old_cmp) == comparable(new_cmp):
-        print("[V5] Nenhuma alteração nos dados.", flush=True)
+        print("[V8] Nenhuma alteração nos dados.", flush=True)
         return 0
 
-    payload["atualizado_em"] = time.strftime("%d/%m/%Y %H:%M:%S", time.gmtime()) + " UTC"
+    payload["atualizado_em"] = (
+        time.strftime("%d/%m/%Y %H:%M:%S", time.gmtime()) + " UTC"
+    )
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[V5] Cache atualizado: {OUT} ({len(good)} documentos).", flush=True)
+    OUT.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print(
+        f"[V8] Cache atualizado: {OUT} ({len(good)} documentos).",
+        flush=True,
+    )
     return 0
 
 
@@ -201,5 +332,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"[V5] ERRO: {exc}", file=sys.stderr, flush=True)
+        print(f"[V8] ERRO: {exc}", file=sys.stderr, flush=True)
         raise

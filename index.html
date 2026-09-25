@@ -5,98 +5,116 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Minhas Escalas</title>
 <style>
-*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f3f6f8;color:#17212b}
-header{background:#0b5d4b;color:white;padding:30px 18px;text-align:center}header h1{margin:0 0 6px}
-.wrap{max-width:900px;margin:24px auto;padding:0 14px}.search,.card{background:white;border-radius:16px;padding:20px;box-shadow:0 4px 18px #0001;margin-bottom:16px}
-.search{display:flex;gap:10px}.field{flex:1}label{font-weight:bold;display:block;margin-bottom:7px}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f3f6f8;color:#17212b}
+header{background:#0b5d4b;color:white;padding:30px 18px;text-align:center}
+header h1{margin:0 0 6px}
+.wrap{max-width:900px;margin:24px auto;padding:0 14px}
+.search,.card{background:white;border-radius:16px;padding:20px;box-shadow:0 4px 18px #0001;margin-bottom:16px}
+.search{display:flex;gap:10px}.field{flex:1}
+label{font-weight:bold;display:block;margin-bottom:7px}
 input{width:100%;padding:13px;border:1px solid #dfe6ea;border-radius:10px;font-size:17px;outline:none}
 button{border:0;background:#0b5d4b;color:white;padding:13px 20px;border-radius:10px;font-weight:bold;font-size:16px;cursor:pointer}
-button:disabled{opacity:.6}.info{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}.info div{padding:8px 0;border-bottom:1px solid #eee}
-.lbl{display:block;color:#65727e;font-size:12px;margin-bottom:3px}.val{font-weight:bold}.title{color:#0b5d4b}
-.scale{line-height:1.55;border-left:4px solid #0b5d4b}.scale h3{margin:0 0 10px;font-size:19px}
-.docsub{color:#6b7785;font-size:13px;margin-bottom:12px}.detail{padding:9px 0;border-bottom:1px solid #eee}
-.detail:last-child{border-bottom:0}.primary{font-size:15px;line-height:1.6}.obs{margin-top:10px;color:#596776;font-size:13px}
-table{width:100%;border-collapse:collapse}th,td{padding:10px 8px;border-bottom:1px solid #ddd;text-align:left;font-size:14px}
-th{background:#f7f9fa}.err{color:#9b2525;background:#fff0f0;padding:14px;border-radius:10px}
-.ok{color:#17623f;background:#edf9f2;padding:12px;border-radius:10px;margin-bottom:16px}.muted{color:#65727e}
-a{color:#0b5d4b;font-weight:bold;text-decoration:none}.footer{color:#77838d;text-align:center;font-size:12px;margin:20px 0 35px}
-@media(max-width:650px){.search{display:block}.search button{width:100%;margin-top:10px}.info{grid-template-columns:1fr}
-table{font-size:12px}th,td{padding:7px 4px}.wrap{margin-top:16px}.card,.search{padding:16px}}
+button:disabled{opacity:.6}
+.info{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+.info div{padding:8px 0;border-bottom:1px solid #eee}
+.lbl{display:block;color:#65727e;font-size:12px;margin-bottom:3px}
+.val{font-weight:bold}.title{color:#0b5d4b}
+.scale{line-height:1.55;border-left:4px solid #0b5d4b}
+.scale h3{margin:0 0 10px;font-size:19px}
+.docsub{color:#6b7785;font-size:13px;margin-bottom:12px}
+.detail{padding:9px 0;border-bottom:1px solid #eee}
+.detail:last-child{border-bottom:0}
+.primary{font-size:15px;line-height:1.6}
+.obs{margin-top:10px;color:#596776;font-size:13px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 8px;border-bottom:1px solid #ddd;text-align:left;font-size:14px}
+th{background:#f7f9fa}
+.err{color:#9b2525;background:#fff0f0;padding:14px;border-radius:10px}
+.ok{color:#17623f;background:#edf9f2;padding:12px;border-radius:10px;margin-bottom:16px}
+.muted{color:#65727e}
+a{color:#0b5d4b;font-weight:bold;text-decoration:none}
+.footer{color:#77838d;text-align:center;font-size:12px;margin:20px 0 35px}
+@media(max-width:650px){
+  .search{display:block}.search button{width:100%;margin-top:10px}
+  .info{grid-template-columns:1fr}table{font-size:12px}
+  th,td{padding:7px 4px}.wrap{margin-top:16px}.card,.search{padding:16px}
+}
 </style>
 </head>
 <body>
-<header><h1>📋 Minhas Escalas</h1><div>Consulta de escalas por matrícula</div></header>
+<header>
+  <h1>📋 Minhas Escalas</h1>
+  <div>Consulta de escalas por matrícula</div>
+</header>
+
 <main class="wrap">
-<section class="search"><div class="field"><label for="mat">Matrícula</label>
-<input id="mat" placeholder="Ex.: 119719-3 ou 1197193" autocomplete="off"></div>
-<button id="consultar">Consultar</button></section>
+<section class="search">
+  <div class="field">
+    <label for="mat">Matrícula</label>
+    <input id="mat" placeholder="Ex.: 119719-3 ou 1197193" autocomplete="off">
+  </div>
+  <button id="consultar">Consultar</button>
+</section>
 <div id="out"></div>
-<div class="footer">Base consultada pelo servidor · dados provenientes do processo público do SEI</div>
+<div class="footer">Base atualizada automaticamente a partir do processo público do SEI</div>
 </main>
 
 <script>
-const $=id=>document.getElementById(id),mat=$('mat'),btn=$('consultar'),out=$('out');
-const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const $=id=>document.getElementById(id);
+const mat=$('mat'),btn=$('consultar'),out=$('out');
+
+const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({
+  '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+}[c]));
+
 const val=x=>x===undefined||x===null||x===''?'—':String(x);
-const txt=s=>String(s||'').replace(/\s+/g,' ').trim();
-function link(url,label='Abrir no SEI ↗'){return url?'<a href="'+esc(url)+'" target="_blank" rel="noopener">'+label+'</a>':''}
-function horario(h){return h?String(h).replace(/\s*\/\s*/g,' às ').replace(/\s+/g,' ').trim():''}
-function data(d){return d?String(d).trim():''}
 
-/*
-  Classificação por documento, nunca por matrícula.
-  Se o server.py passar "tipo" ou "tipo_documento", ele terá prioridade.
-*/
-const TIPOS_DOCUMENTO={
-  "93238320":"Escala de Folga","93341535":"Escala de Folga",
-  "93427130":"Escala de Folga","93665138":"Escala de Folga",
-  "94071293":"Escala de Folga",
-  "93931054":"Escala de Serviço","94023946":"Escala de Serviço"
-};
-
-function tipo(r,o){
-  const explicit=o?.tipo||o?.tipo_documento||r?.tipo||r?.tipo_documento;
-  if(explicit)return explicit;
-  const id=String(r?.id||'');
-  if(id==='93063654'||/escala principal/i.test(r?.titulo||''))return 'Escala Principal';
-  if(TIPOS_DOCUMENTO[id])return TIPOS_DOCUMENTO[id];
-  if(/folga/i.test(o?.situacao||'')||/folga/i.test(o?.observacao||''))return 'Escala de Folga';
-  if(/permuta/i.test(o?.situacao||'')||/permuta/i.test(r?.titulo||''))return 'Permuta';
-  return 'Escala de Serviço';
+function horario(h){
+  return h?String(h).replace(/\s*\/\s*/g,' às ').replace(/\s+/g,' ').trim():'';
 }
 
-function diasPrincipal(o,r){
-  if(o?.dias)return o.dias;
-  if(String(r?.id)==='93063654')
-    return '01, 05, 09, 13, 17, 21, 25 e 29 de setembro de 2026';
-  return '';
+function link(url,label='Abrir no SEI ↗'){
+  return url
+    ? '<a href="'+esc(url)+'" target="_blank" rel="noopener">'+label+'</a>'
+    : '';
 }
 
 function perfil(d){
   const p=d.perfil||{};
-  const f=[['Nome',p.nome],['Graduação',p.graduacao],['Função',p.funcao],['Serviço',p.servico],
-    ['Viatura',p.viatura],['Equipe',p.equipe],['Horário da escala principal',horario(p.horario)],['Jornada',p.jornada]];
+  const f=[
+    ['Nome',p.nome],
+    ['Graduação',p.graduacao],
+    ['Função',p.funcao],
+    ['Serviço',p.servico],
+    ['Viatura',p.viatura],
+    ['Equipe',p.equipe],
+    ['Horário da escala principal',horario(p.horario)],
+    ['Jornada',p.jornada]
+  ];
+
   return '<div class="card"><h2 class="title">👮 Matrícula '+esc(d.matricula)+'</h2><div class="info">'+
     f.map(([a,b])=>'<div><span class="lbl">'+esc(a)+'</span><span class="val">'+esc(val(b))+'</span></div>').join('')+
     '</div></div>';
 }
 
 function card(o,r,n){
-  const t=tipo(r,o);
-  const sub='<div class="docsub">'+esc(r.titulo||'')+' · '+link(r.url)+'</div>';
+  const t=r.tipo_documento||o.tipo_documento||'Escala de Serviço';
+  const sub='<div class="docsub">'+esc(r.titulo||'')+' · Documento '+esc(r.id||'—')+' '+link(r.url)+'</div>';
 
   if(t==='Escala Principal'){
-    const dias=diasPrincipal(o,r);
     return '<div class="card scale"><h3>'+n+'. Escala Principal — '+esc(r.id||'—')+'</h3>'+sub+
       '<div class="primary">'+
       (o.servico?'<div>'+esc(o.servico)+(o.viatura?' ('+esc(o.viatura)+')':'')+(o.equipe?', Equipe '+esc(o.equipe)+'.':'.')+'</div>':'')+
-      (dias?'<div>Dias previstos: <b>'+esc(dias)+'.</b></div>':'')+
+      (o.dias?'<div>Dias previstos: <b>'+esc(o.dias)+'.</b></div>':'')+
       (o.horario?'<div>Horário: <b>'+esc(horario(o.horario))+'.</b></div>':'')+
-      '</div>'+(o.observacao?'<div class="obs"><b>Observação:</b> '+esc(o.observacao)+'</div>':'')+
+      '</div>'+
+      (o.observacao?'<div class="obs"><b>Observação:</b> '+esc(o.observacao)+'</div>':'')+
       '</div>';
   }
 
-  const date=data(o.data||r.documento_data||r.data_protocolo||'');
+  const date=o.data||r.documento_data||r.data_protocolo||'';
+
   return '<div class="card scale"><h3>'+n+'. '+esc(t)+' — '+esc(r.id||'—')+'</h3>'+sub+
     (date?'<div class="detail"><span class="lbl">Data</span><span class="val">'+esc(date)+'</span></div>':'')+
     (o.servico?'<div class="detail"><span class="lbl">Serviço</span><span class="val">'+esc(o.servico)+'</span></div>':'')+
@@ -106,7 +124,7 @@ function card(o,r,n){
     (o.nome?'<div class="detail"><span class="lbl">Nome</span><span class="val">'+esc(o.nome)+'</span></div>':'')+
     (o.funcao?'<div class="detail"><span class="lbl">Função</span><span class="val">'+esc(o.funcao)+'</span></div>':'')+
     (o.horario?'<div class="detail"><span class="lbl">Horário</span><span class="val">'+esc(horario(o.horario))+'</span></div>':'')+
-    '<div class="detail"><span class="lbl">Situação</span><span class="val">'+esc(t)+'</span></div>'+
+    '<div class="detail"><span class="lbl">Situação</span><span class="val">'+esc(o.situacao||t)+'</span></div>'+
     (o.observacao?'<div class="obs"><b>Motivo/observação:</b> '+esc(o.observacao)+'</div>':'')+
     '</div>';
 }
@@ -116,37 +134,53 @@ function render(d){
     out.innerHTML='<div class="card err"><b>Nenhuma ocorrência encontrada.</b><br>A matrícula não apareceu nos documentos disponíveis na última atualização.</div>';
     return;
   }
+
   let h='<div class="ok"><b>Consulta concluída.</b> '+d.documentos_com_ocorrencia+' registro(s) encontrado(s) para a matrícula.</div>'+perfil(d);
   let rows=[],n=0;
+
   d.resultados.forEach(r=>(r.ocorrencias||[]).forEach(o=>{
-    n++; h+=card(o,r,n);
-    const t=tipo(r,o);
+    n++;
+    h+=card(o,r,n);
+
+    const t=r.tipo_documento||o.tipo_documento||'Escala de Serviço';
     rows.push([
-      t==='Escala Principal'?diasPrincipal(o,r):data(o.data||r.documento_data||r.data_protocolo||''),
+      t==='Escala Principal'?(o.dias||''):(o.data||''),
       t+' ('+(r.id||'—')+')',
-      o.servico||r.titulo||'',
+      o.servico||'',
       horario(o.horario),
-      t==='Escala Principal'?'Regular':t.replace(/^Escala /,'')
+      o.situacao||t
     ]);
   }));
+
   h+='<div class="card"><h2 class="title">Resumo completo</h2><div style="overflow:auto"><table><thead><tr><th>Data</th><th>Registro</th><th>Serviço</th><th>Horário</th><th>Situação</th></tr></thead><tbody>'+
     rows.map(r=>'<tr>'+r.map(c=>'<td>'+esc(val(c))+'</td>').join('')+'</tr>').join('')+
     '</tbody></table></div></div>';
+
   out.innerHTML=h;
 }
 
 async function consultar(){
   const m=mat.value.trim();
-  if(!m){out.innerHTML='<div class="card err">Digite uma matrícula.</div>';return}
-  btn.disabled=true;out.innerHTML='<div class="card muted">Consultando a base de escalas…</div>';
+  if(!m){
+    out.innerHTML='<div class="card err">Digite uma matrícula.</div>';
+    return;
+  }
+
+  btn.disabled=true;
+  out.innerHTML='<div class="card muted">Consultando a base de escalas…</div>';
+
   try{
     const r=await fetch('/api/consultar?matricula='+encodeURIComponent(m),{cache:'no-store'});
     const d=await r.json();
-    if(!r.ok||!d.ok)throw Error(d.erro||'Erro na consulta.');
+    if(!r.ok||!d.ok) throw Error(d.erro||'Erro na consulta.');
     render(d);
-  }catch(e){out.innerHTML='<div class="card err">'+esc(e.message)+'</div>'}
-  finally{btn.disabled=false}
+  }catch(e){
+    out.innerHTML='<div class="card err">'+esc(e.message)+'</div>';
+  }finally{
+    btn.disabled=false;
+  }
 }
+
 btn.addEventListener('click',consultar);
 mat.addEventListener('keydown',e=>{if(e.key==='Enter')consultar()});
 </script>

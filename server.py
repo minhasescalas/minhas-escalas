@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +19,21 @@ PROCESS_URL = (
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
 
+GRADE_RE = r"(?:1º\s*SGT|2º\s*SGT|3º\s*SGT|ST|CB|SD)"
+PERSON_RE = re.compile(
+    rf"(?P<graduacao>{GRADE_RE})\s*"
+    r"(?P<matricula>\d{6}-\d)\s*"
+    rf"(?P<nome>.*?)(?=\s+{GRADE_RE}\s*\d{6}-\d\b|$)",
+    re.I,
+)
+
+MONTHS = {
+    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
+    "abril": 4, "maio": 5, "junho": 6, "julho": 7,
+    "agosto": 8, "setembro": 9, "outubro": 10,
+    "novembro": 11, "dezembro": 12,
+}
+
 
 def clean(value):
     return re.sub(r"\s+", " ", str(value or "")).strip()
@@ -29,32 +43,34 @@ def norm(value):
     return re.sub(r"\D", "", str(value or ""))
 
 
-def split_items(value):
-    if not value:
-        return []
-
-    value = str(value).replace("\r", "\n")
-
-    parts = re.split(
-        r"\s*/\s*|\s*\|\s*|\s*;\s*|\n+",
-        value
-    )
-
-    return [clean(x) for x in parts if clean(x)]
+def load_data():
+    if not DATA_FILE.exists():
+        return None
+    try:
+        return json.loads(DATA_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
-def extract_matriculas(value):
-    if not value:
-        return []
-
+def extract_vehicles(value):
     found = re.findall(
-        r"(?<!\d)\d{6}\s*[-/.]\s*\d(?!\d)"
-        r"|"
-        r"(?<!\d)\d{6}\s+\d(?!\d)",
-        str(value)
+        r"(?:M\.?\s*O\.?|GT|PCR)\s*\d+(?:\.\d+)?",
+        value or "",
+        re.I,
     )
+    return [clean(x).replace("M.O", "M.O.") for x in dict.fromkeys(found)]
 
-    return [clean(x).replace(" ", "") for x in found]
+
+def service_name(value):
+    s = clean(value)
+    s = re.sub(
+        r"\s*[-–—]?\s*(?:M\.?\s*O\.?|GT|PCR)\s*\d+(?:\.\d+)?",
+        "",
+        s,
+        flags=re.I,
+    )
+    s = clean(s).strip(" -–—")
+    return s.title() if s else ""
 
 
 def extract_function(value):
@@ -62,231 +78,279 @@ def extract_function(value):
     return m.group(1).upper() if m else ""
 
 
-def strip_function(value):
-    return clean(
-        re.sub(
-            r"\s*\((?:CMT|PAT|MOT)\)\s*",
-            "",
-            value or "",
-            flags=re.I
-        )
+def clean_name(value):
+    value = clean(value)
+    value = re.sub(r"\s*\((?:CMT|PAT|MOT)\)\s*", " ", value, flags=re.I)
+    value = re.sub(
+        r"\s*\*?\s*a/c\s+dia\s+\d{1,2}\s*",
+        " ",
+        value,
+        flags=re.I,
     )
-
-
-def extract_vehicle(value):
-    found = re.findall(
-        r"(?:M\.?\s*O\.?|GT|PCR)\s*\d+(?:\.\d+)?",
-        value or "",
-        re.I
+    value = re.sub(
+        r"\s*\((?:compensação|compensacao|remanejado)[^)]*\)\s*",
+        " ",
+        value,
+        flags=re.I,
     )
-    return ", ".join(dict.fromkeys(found))
+    return clean(value)
 
 
-def load_data():
-    if not DATA_FILE.exists():
-        return None
+def extract_note(value):
+    value = clean(value)
+    notes = []
+    for pattern in (
+        r"\*?\s*a/c\s+dia\s+\d{1,2}",
+        r"\((?:compensação|compensacao)[^)]*\)",
+        r"\((?:remanejado[^)]*)\)",
+    ):
+        notes.extend(re.findall(pattern, value, flags=re.I))
+    return clean(" ".join(dict.fromkeys(notes)))
 
-    try:
-        return json.loads(
-            DATA_FILE.read_text(encoding="utf-8")
-        )
-    except Exception:
-        return None
+
+def parse_people(effective):
+    people = []
+    for match in PERSON_RE.finditer(clean(effective)):
+        raw_name = clean(match.group("nome"))
+        people.append({
+            "graduacao": clean(match.group("graduacao")),
+            "matricula": clean(match.group("matricula")),
+            "nome": clean_name(raw_name),
+            "funcao": extract_function(raw_name),
+            "observacao": extract_note(raw_name),
+        })
+    return people
 
 
-MONTHS = {
-    "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
-    "abril": 4, "maio": 5, "junho": 6, "julho": 7,
-    "agosto": 8, "setembro": 9, "outubro": 10,
-    "novembro": 11, "dezembro": 12,
-}
-
-def document_period(document):
-    title = clean(document.get("titulo", ""))
-    m = re.search(r"(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+(20\d{2})", title, re.I)
+def month_year(data):
+    text = clean(data.get("processo", ""))
+    m = re.search(
+        r"(janeiro|fevereiro|março|marco|abril|maio|junho|julho|"
+        r"agosto|setembro|outubro|novembro|dezembro)[^0-9]*(20\d{2})",
+        text,
+        re.I,
+    )
     if m:
         return MONTHS[m.group(1).lower()], int(m.group(2))
-    for value in (document.get("documento_data", ""), document.get("data_protocolo", "")):
-        m = re.search(r"(\d{2})/(\d{2})/(20\d{2})", str(value or ""))
-        if m:
-            return int(m.group(2)), int(m.group(3))
-    return None, None
+    return 9, 2026
 
-def full_date_from_day(day, document):
+
+def full_date(day, data):
     m = re.search(r"\b(0?[1-9]|[12]\d|3[01])\b", clean(day))
     if not m:
         return ""
-    month, year = document_period(document)
-    if not month or not year:
-        return ""
+    month, year = month_year(data)
     try:
-        d = int(m.group(1))
-        datetime(year, month, d)
-        return f"{d:02d}/{month:02d}/{year}"
+        datetime(year, month, int(m.group(1)))
+        return f"{int(m.group(1)):02d}/{month:02d}/{year}"
     except ValueError:
         return ""
 
-def classify_occurrence(document, text):
-    title = clean(document.get("titulo", ""))
-    upper = (title + " " + text).upper()
-    if re.search(r"ESCALA\s+PRINCIPAL", title, re.I):
+
+def normalize_time(value):
+    return clean(value).replace("/", " às ")
+
+
+def classify_document(document, row_section=""):
+    if document.get("principal"):
         return "Escala Principal"
-    if "PERMUTA" in upper:
+    title = clean(document.get("titulo", ""))
+    section = clean(row_section).upper()
+    if "PERMUTA" in title.upper():
         return "Permuta de Serviço"
-    if "FOLGA" in upper or "CONCESSÃO DO CMT" in upper or "CONCESÃO DO CMT" in upper:
+    if "FOLGA" in section:
         return "Escala de Folga"
-    if "COMPENSAÇÃO" in upper or "COMPENSACAO" in upper:
+    if "SERVIÇO" in section or "SERVICO" in section:
         return "Escala de Serviço"
+    if "FOLGA" in title.upper():
+        return "Escala de Folga"
     return "Escala de Serviço"
 
-def infer_row(row, matricula, document):
-    cells = [clean(x) for x in (row or [])]
-    text = " | ".join(cells)
 
-    if norm(matricula) not in norm(text):
+def parse_principal_row(row, matricula, data):
+    cells = [clean(x) for x in row.get("cells", [])]
+    if len(cells) < 8:
         return None
 
-    row_day = cells[6] if len(cells) >= 7 else ""
-    row_date = full_date_from_day(row_day, document)
-    out = {
-        "data": row_date or (
-            document.get("documento_data")
-            or document.get("data_protocolo", "")
-        ),
-        "servico": "",
-        "equipe": "",
-        "graduacao": "",
+    mats = re.findall(r"\d{6}-\d", cells[4])
+    target = norm(matricula)
+    idx = next((i for i, m in enumerate(mats) if norm(m) == target), None)
+    if idx is None:
+        return None
+
+    grades = re.findall(GRADE_RE, cells[3], flags=re.I)
+    name_matches = re.findall(r"([^()]+?)\s*\((CMT|PAT|MOT)\)", cells[5], flags=re.I)
+
+    raw_name = ""
+    funcao = ""
+    if idx < len(name_matches):
+        raw_name = clean(name_matches[idx][0])
+        funcao = name_matches[idx][1].upper()
+
+    if not raw_name:
+        # Fallback: use the segment around the target's ordinal position.
+        raw_name = clean(cells[5])
+
+    vehicles = extract_vehicles(cells[0])
+    vehicle = vehicles[idx] if idx < len(vehicles) else ""
+    grad = grades[idx] if idx < len(grades) else ""
+
+    return {
+        "data": "",
+        "servico": service_name(cells[0]),
+        "equipe": clean(row.get("equipe", "")),
+        "graduacao": clean(grad),
         "matricula": matricula,
-        "nome": "",
-        "funcao": "",
-        "viatura": "",
-        "horario": "",
-        "dias": "",
-        "observacao": "",
-        "situacao": "",
-        "contexto": text,
+        "nome": clean_name(raw_name),
+        "funcao": funcao,
+        "viatura": vehicle,
+        "horario": normalize_time(cells[7]),
+        "dias": clean(cells[6]),
+        "observacao": extract_note(cells[5]),
+        "situacao": "Regular",
+        "tipo_documento": "Escala Principal",
     }
 
-    if len(cells) >= 8:
-        out["servico"] = cells[0]
-        out["equipe"] = cells[1]
-        out["graduacao"] = cells[3]
-        out["horario"] = cells[7]
-        out["dias"] = cells[6]
-        out["viatura"] = extract_vehicle(cells[0])
 
-        mats = extract_matriculas(cells[4])
-        names = split_items(cells[5])
-        grades = split_items(cells[3])
+def parse_row(document, row, matricula, data):
+    cells = [clean(x) for x in row.get("cells", [])]
+    if not cells:
+        return []
 
-        idx = next(
-            (
-                i
-                for i, value in enumerate(mats)
-                if norm(value) == norm(matricula)
-            ),
-            None
+    text = " | ".join(cells)
+    if norm(matricula) not in norm(text):
+        return []
+
+    if document.get("principal"):
+        hit = parse_principal_row(row, matricula, data)
+        return [hit] if hit else []
+
+    # Standard SEI tables are usually:
+    # SERVIÇO | EFETIVO | DIA | HORÁRIO | SEI
+    if len(cells) < 4:
+        return []
+
+    service = cells[0]
+    effective = cells[1]
+    day = cells[2]
+    horario = cells[3]
+    section = row.get("section", "")
+    tipo = classify_document(document, section)
+    people = parse_people(effective)
+
+    # Some tables have a single person without a recognizable grade prefix.
+    if not people and norm(matricula) in norm(effective):
+        people = [{
+            "graduacao": "",
+            "matricula": matricula,
+            "nome": "",
+            "funcao": "",
+            "observacao": "",
+        }]
+
+    hits = []
+    for person in people:
+        if norm(person["matricula"]) != norm(matricula):
+            continue
+
+        observacao = clean(
+            " ".join(
+                x for x in [person.get("observacao", ""), clean(cells[4]) if len(cells) >= 5 else ""]
+                if x
+            )
         )
 
-        if idx is not None:
-            if idx < len(names):
-                out["nome"] = strip_function(names[idx])
-                out["funcao"] = extract_function(names[idx])
+        situacao = {
+            "Escala de Folga": "Folga",
+            "Permuta de Serviço": "Permuta",
+        }.get(tipo, "Escala de Serviço")
 
-            if idx < len(grades):
-                out["graduacao"] = grades[idx]
+        hits.append({
+            "data": full_date(day, data),
+            "servico": service_name(service),
+            "equipe": "",
+            "graduacao": person.get("graduacao", ""),
+            "matricula": matricula,
+            "nome": person.get("nome", ""),
+            "funcao": person.get("funcao", ""),
+            "viatura": ", ".join(extract_vehicles(service)),
+            "horario": normalize_time(horario),
+            "dias": clean(day),
+            "observacao": observacao,
+            "situacao": situacao,
+            "tipo_documento": tipo,
+        })
 
-    if not out["horario"]:
-        m = re.search(
-            r"\b\d{1,2}h\d{0,2}\s*/\s*\d{1,2}h\d{0,2}\b",
-            text,
-            re.I
-        )
-        if m:
-            out["horario"] = m.group(0)
-
-    if not out["data"]:
-        m = re.search(
-            r"\b\d{2}/\d{2}/\d{4}\b",
-            text
-        )
-        if m:
-            out["data"] = m.group(0)
-
-    if not out["funcao"]:
-        out["funcao"] = extract_function(text)
-
-    if not out["nome"]:
-        m = re.search(
-            r"([A-ZÀ-Ú][A-ZÀ-Ú .'-]{2,})\s*"
-            r"\((CMT|PAT|MOT)\)",
-            text,
-            re.I
-        )
-        if m:
-            out["nome"] = clean(m.group(1))
-
-    if not out["viatura"]:
-        out["viatura"] = extract_vehicle(text)
-
-    tipo = classify_occurrence(document, text)
-    out["tipo_documento"] = tipo
-    if tipo == "Escala de Folga":
-        out["situacao"] = "Folga"
-    elif tipo == "Permuta de Serviço":
-        out["situacao"] = "Permuta"
-    elif "COMPENSAÇÃO" in text.upper() or "COMPENSACAO" in text.upper():
-        out["situacao"] = "Compensação"
-    else:
-        out["situacao"] = "Escala"
-
-    return out
+    return hits
 
 
-def find_candidates(matricula):
+def date_key(value):
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", str(value or ""))
+    return (
+        int(m.group(3)), int(m.group(2)), int(m.group(1))
+    ) if m else (9999, 99, 99)
+
+
+def result_priority(tipo):
+    return {
+        "Escala Principal": 0,
+        "Escala de Folga": 1,
+        "Escala de Serviço": 2,
+        "Permuta de Serviço": 3,
+    }.get(tipo, 9)
+
+
+def consult(matricula):
+    original = clean(matricula)
+    normalized = norm(original)
+
+    if len(normalized) < 7:
+        return {
+            "ok": False,
+            "codigo": "MATRICULA_INVALIDA",
+            "erro": "Digite uma matrícula válida, por exemplo 113260-1.",
+        }
+
     data = load_data()
+    if not data or not data.get("documentos"):
+        return {
+            "ok": False,
+            "codigo": "BASE_AINDA_NAO_ATUALIZADA",
+            "erro": "A base de escalas ainda não foi atualizada.",
+        }
 
-    if not data:
-        return None, []
-
-    results = []
-
+    resultados = []
     for document in data.get("documentos", []):
         occurrences = []
-
         for row in document.get("rows", []):
-            hit = infer_row(
-                row,
-                matricula,
-                document
-            )
+            occurrences.extend(parse_row(document, row, original, data))
 
-            if hit:
-                occurrences.append(hit)
+        if not occurrences:
+            continue
 
-        if occurrences:
-            results.append({
-                "id": document.get("id", ""),
-                "titulo": document.get(
-                    "titulo",
-                    "Documento SEI"
-                ),
-                "data_protocolo": document.get(
-                    "data_protocolo",
-                    ""
-                ),
-                "documento_data": document.get(
-                    "documento_data",
-                    ""
-                ),
-                "url": document.get("url", ""),
-                "ocorrencias": occurrences,
-            })
+        occurrences.sort(key=lambda o: date_key(o.get("data", "")))
+        tipo = occurrences[0].get("tipo_documento", "Escala de Serviço")
 
-    return data, results
+        resultados.append({
+            "id": document.get("id", ""),
+            "titulo": document.get("titulo", "Documento SEI"),
+            "tipo_documento": tipo,
+            "data_protocolo": document.get("data_protocolo", ""),
+            "documento_data": document.get("documento_data", ""),
+            "url": document.get("url", ""),
+            "ocorrencias": occurrences,
+        })
 
+    resultados.sort(
+        key=lambda r: (
+            result_priority(r.get("tipo_documento", "")),
+            min((date_key(o.get("data", "")) for o in r["ocorrencias"]), default=(9999, 99, 99)),
+            r.get("id", ""),
+        )
+    )
 
-def basic_profile(results):
+    # Profile is taken preferentially from the main scale, not from later
+    # folga/service documents, so a later occurrence cannot overwrite it.
     profile = {
         "nome": "",
         "graduacao": "",
@@ -295,193 +359,27 @@ def basic_profile(results):
         "viatura": "",
         "equipe": "",
         "horario": "",
-        "jornada": "24 x 72",
+        "jornada": data.get("jornada", "24 x 72"),
     }
 
-    for result in results:
-        for occurrence in result["ocorrencias"]:
-            for key in profile:
-                if (
-                    not profile[key]
-                    and occurrence.get(key)
-                ):
-                    profile[key] = occurrence[key]
-
-    return profile
-
-
-def get_gemini_client():
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-
-    if not key:
-        raise RuntimeError(
-            "GEMINI_API_KEY não está configurada no Render."
-        )
-
-    return genai.Client(api_key=key)
-
-
-def analyze_with_ai(matricula, documents):
-    payload = []
-
-    for document in documents:
-        payload.append({
-            "id": document["id"],
-            "titulo": document["titulo"],
-            "data_protocolo": document["data_protocolo"],
-            "documento_data": document["documento_data"],
-            "ocorrencias": document["ocorrencias"],
-        })
-
-    prompt = f"""
-Analise SOMENTE os dados fornecidos abaixo para a matrícula
-{matricula}.
-
-Não invente informações e não use informações de outras matrículas.
-
-Objetivo:
-organizar os registros encontrados e corrigir a classificação
-quando o próprio conteúdo do documento deixar isso claro.
-
-Regras importantes:
-
-1. ESCALA PRINCIPAL
-- Identifique os dias efetivamente associados à matrícula.
-- Não complete dias por inferência.
-- Não copie dias de outra pessoa.
-- Se o documento tiver texto truncado, use somente o que estiver
-  claramente associado à matrícula.
-- Preserve o horário encontrado no documento.
-
-2. ESCALA DE FOLGA
-- Se houver indicação de folga, "concessão do CMT" ou documento
-  claramente referente à folga, classifique como "Folga".
-- Preserve a data específica e o horário específico.
-- Não transforme uma folga em escala regular.
-
-3. OUTROS REGISTROS
-- Preserve permuta, compensação e retificação quando estiverem
-  claramente indicadas.
-- Não misture informações de documentos diferentes.
-
-4. PERFIL
-- O nome, graduação, função, serviço, viatura e equipe devem
-  corresponder à matrícula consultada.
-- Jornada padrão: "24 x 72", salvo informação diferente explícita.
-
-5. IMPORTANTE
-- Cada ocorrência deve permanecer vinculada ao seu documento.
-- Não invente datas.
-- Não invente viatura.
-- Não invente equipe.
-- Não invente horários.
-- Quando um campo não puder ser determinado, deixe vazio.
-
-Responda SOMENTE JSON, exatamente neste formato:
-
-{{
-  "perfil": {{
-    "nome": "",
-    "graduacao": "",
-    "funcao": "",
-    "servico": "",
-    "viatura": "",
-    "equipe": "",
-    "horario": "",
-    "jornada": "24 x 72"
-  }},
-  "ocorrencias": [
-    {{
-      "documento": "",
-      "titulo": "",
-      "tipo": "",
-      "data": "",
-      "servico": "",
-      "equipe": "",
-      "graduacao": "",
-      "matricula": "{matricula}",
-      "nome": "",
-      "funcao": "",
-      "viatura": "",
-      "horario": "",
-      "dias": "",
-      "observacao": ""
-    }}
-  ]
-}}
-
-DADOS:
-{json.dumps(payload, ensure_ascii=False)}
-"""
-
-    client = get_gemini_client()
-
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-        config={
-            "temperature": 0,
-            "response_mime_type": "application/json",
-        },
-    )
-
-    return json.loads(response.text)
-
-
-def result_priority(result):
-    priorities = {
-        "Escala Principal": 0,
-        "Escala de Folga": 1,
-        "Escala de Serviço": 2,
-        "Permuta de Serviço": 3,
-    }
-    return priorities.get(result.get("tipo_documento", ""), 9)
-
-def date_sort_value(value):
-    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", str(value or ""))
-    if m:
-        return (int(m.group(3)), int(m.group(2)), int(m.group(1)))
-    return (9999, 99, 99)
-
-def consult(matricula):
-    original = clean(matricula)
-    normalized = norm(original)
-    if len(normalized) < 5:
-        return {"ok": False, "codigo": "MATRICULA_INVALIDA", "erro": "Digite uma matrícula válida, por exemplo 113260-1."}
-
-    data = load_data()
-    if not data or not data.get("documentos"):
-        return {"ok": False, "codigo": "BASE_AINDA_NAO_ATUALIZADA", "erro": "A base de escalas ainda não foi atualizada."}
-
-    resultados = []
-    for document in data.get("documentos", []):
-        occurrences = []
-        for row in document.get("rows", []):
-            hit = infer_row(row, original, document)
-            if hit:
-                occurrences.append(hit)
-        if not occurrences:
+    for result in resultados:
+        if result.get("tipo_documento") != "Escala Principal":
             continue
-        occurrences.sort(key=lambda o: date_sort_value(o.get("data", "")))
-        groups = {}
-        for occurrence in occurrences:
-            tipo = occurrence.get("tipo_documento", "Escala de Serviço")
-            groups.setdefault(tipo, []).append(occurrence)
-        for tipo, items in groups.items():
-            resultados.append({
-                "id": document.get("id", ""),
-                "titulo": document.get("titulo", "Documento SEI"),
-                "titulo_exibicao": tipo,
-                "data_protocolo": document.get("data_protocolo", ""),
-                "documento_data": document.get("documento_data", ""),
-                "url": document.get("url", ""),
-                "tipo_documento": tipo,
-                "ocorrencias": items,
-            })
+        if result["ocorrencias"]:
+            o = result["ocorrencias"][0]
+            for key in profile:
+                if key != "jornada" and o.get(key):
+                    profile[key] = o[key]
+            break
 
-    resultados.sort(key=lambda r: (result_priority(r), min([date_sort_value(o.get("data", "")) for o in r["ocorrencias"]], default=(9999,99,99)), r.get("id", "")))
+    # Fallback if the principal scale was not available.
+    if not profile["nome"]:
+        for result in resultados:
+            for o in result["ocorrencias"]:
+                for key in ("nome", "graduacao", "funcao", "servico", "viatura", "equipe", "horario"):
+                    if not profile[key] and o.get(key):
+                        profile[key] = o[key]
 
-    profile = basic_profile(resultados)
     return {
         "ok": True,
         "matricula": original,
@@ -499,143 +397,73 @@ def consult(matricula):
 
 @app.get("/")
 def home():
-    return send_from_directory(
-        BASE_DIR,
-        "index.html"
-    )
+    return send_from_directory(BASE_DIR, "index.html")
 
 
 @app.get("/health")
 def health():
     data = load_data()
-
     return jsonify({
         "ok": True,
         "service": "minhas-escalas",
-        "version": "7.0-deterministico",
-        "base_pronta": bool(
-            data and data.get("documentos")
-        ),
-        "documentos": (
-            data.get(
-                "documentos_acessiveis",
-                0
-            )
-            if data
-            else 0
-        ),
-        "atualizado_em": (
-            data.get(
-                "atualizado_em",
-                ""
-            )
-            if data
-            else ""
-        ),
+        "version": "8.0-deterministico",
+        "base_pronta": bool(data and data.get("documentos")),
+        "documentos": data.get("documentos_acessiveis", 0) if data else 0,
+        "atualizado_em": data.get("atualizado_em", "") if data else "",
     })
 
 
 @app.get("/api/consultar")
 def api_consultar():
-    return jsonify(
-        consult(
-            request.args.get(
-                "matricula",
-                ""
-            )
-        )
-    )
+    return jsonify(consult(request.args.get("matricula", "")))
 
 
 @app.get("/api/status")
 def api_status():
     data = load_data()
-
     if not data:
         return jsonify({
             "ok": False,
             "base_pronta": False,
-            "mensagem": (
-                "Base ainda não atualizada."
-            ),
-        })
+            "mensagem": "Base ainda não atualizada.",
+        }), 503
 
     return jsonify({
         "ok": True,
-        "base_pronta": bool(
-            data.get("documentos")
-        ),
-        "version": "7.0-deterministico",
-        "processo": data.get(
-            "processo",
-            ""
-        ),
-        "total_registros_processo": data.get(
-            "total_registros_processo",
-            0
-        ),
-        "documentos_acessiveis": data.get(
-            "documentos_acessiveis",
-            0
-        ),
-        "documentos_com_falha": data.get(
-            "documentos_com_falha",
-            0
-        ),
-        "atualizado_em": data.get(
-            "atualizado_em",
-            ""
-        ),
+        "base_pronta": bool(data.get("documentos")),
+        "version": "8.0-deterministico",
+        "processo": data.get("processo", ""),
+        "total_registros_processo": data.get("total_registros_processo", 0),
+        "documentos_acessiveis": data.get("documentos_acessiveis", 0),
+        "documentos_com_falha": data.get("documentos_com_falha", 0),
+        "atualizado_em": data.get("atualizado_em", ""),
     })
 
 
 @app.get("/test-sei")
 def test_sei():
     data = load_data()
-
     if not data:
         return jsonify({
             "ok": False,
             "base_pronta": False,
-            "mensagem": (
-                "O arquivo data/sei_cache.json "
-                "não está disponível no servidor."
-            ),
+            "mensagem": "O arquivo data/sei_cache.json não está disponível no servidor.",
         }), 503
 
     return jsonify({
         "ok": True,
-        "base_pronta": bool(
-            data.get("documentos")
-        ),
-        "mensagem": (
-            "O servidor está funcionando e "
-            "a base local de escalas está disponível."
-        ),
-        "documentos": len(
-            data.get("documentos", [])
-        ),
-        "total_registros_processo": data.get(
-            "total_registros_processo",
-            0
-        ),
-        "atualizado_em": data.get(
-            "atualizado_em",
-            ""
-        ),
-        "fonte": data.get(
-            "fonte",
-            PROCESS_URL
-        ),
+        "base_pronta": bool(data.get("documentos")),
+        "mensagem": "O servidor está funcionando e a base local de escalas está disponível.",
+        "documentos": len(data.get("documentos", [])),
+        "total_registros_processo": data.get("total_registros_processo", 0),
+        "atualizado_em": data.get("atualizado_em", ""),
+        "fonte": data.get("fonte", PROCESS_URL),
     })
 
 
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
-        port=int(
-            os.environ.get("PORT", 5000)
-        ),
-        debug=False
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False,
     )
-
